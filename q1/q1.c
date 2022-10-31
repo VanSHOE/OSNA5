@@ -3,7 +3,11 @@
 #include <pthread.h>
 #include <semaphore.h>
 #include <unistd.h>
+#include <time.h>
 #include "../colors.h"
+
+int curTime;
+pthread_mutex_t timeMutex;
 
 struct queueNode
 {
@@ -15,6 +19,7 @@ struct queue
 {
     struct queueNode *front;
     struct queueNode *rear;
+    pthread_mutex_t waitingMutex;
     int size;
 };
 
@@ -23,10 +28,13 @@ void initQueue(struct queue *q)
     q->front = NULL;
     q->rear = NULL;
     q->size = 0;
+    pthread_mutex_init(&q->waitingMutex, NULL);
 }
 
 void enqueue(struct queue *q, int data)
 {
+    // get lock
+    pthread_mutex_lock(&q->waitingMutex);
     struct queueNode *newNode = (struct queueNode *)malloc(sizeof(struct queueNode));
     newNode->data = data;
     newNode->next = NULL;
@@ -41,13 +49,18 @@ void enqueue(struct queue *q, int data)
         q->rear = newNode;
     }
     q->size++;
+    // release lock
+    pthread_mutex_unlock(&q->waitingMutex);
 }
 
 int dequeue(struct queue *q)
 {
+    // get lock
+    pthread_mutex_lock(&q->waitingMutex);
     if (q->front == NULL)
     {
         printf("Queue is empty\n");
+        pthread_mutex_unlock(&q->waitingMutex);
         return -1;
     }
 
@@ -62,6 +75,9 @@ int dequeue(struct queue *q)
         q->rear = NULL;
     }
 
+    // release lock
+    pthread_mutex_unlock(&q->waitingMutex);
+
     return data;
 }
 
@@ -70,12 +86,6 @@ struct queue *waiting;
 int washingMachines;
 pthread_mutex_t washingMachinesMutex;
 
-void func1(void)
-{
-    printf("I am someone\n");
-    sleep(1);
-}
-
 struct student
 {
     int index;
@@ -83,7 +93,16 @@ struct student
     int W; // W is the time required by student to use the washing machine
     int P; // P is the time after which student will leave without using the washing machine
     pthread_mutex_t *mutex;
+    pthread_t thread;
 };
+struct student *students;
+
+void *studentIn(void *arg)
+{
+    struct student *studentInfo = (struct student *)arg;
+
+    free(studentInfo);
+}
 
 int cmpfunc(const void *a, const void *b)
 {
@@ -109,15 +128,16 @@ int main()
         exit(1);
     }
 
+    pthread_mutex_init(&timeMutex, NULL);
+
     initQueue(waiting);
 
     pthread_mutex_init(&washingMachinesMutex, NULL);
-
     pthread_mutex_lock(&washingMachinesMutex);
     washingMachines = m;
     pthread_mutex_unlock(&washingMachinesMutex);
 
-    struct student *students = (struct student *)malloc(n * sizeof(struct student));
+    students = (struct student *)malloc(n * sizeof(struct student));
 
     // error check
     if (students == NULL)
@@ -145,51 +165,44 @@ int main()
     qsort(students, n, sizeof(struct student), cmpfunc);
 
     // find max time till which we need to simulate
-    // int max = 0;
-    // for (int i = 0; i < n; i++)
-    // {
-    //     if (students[i].T + students[i].P > max)
-    //     {
-    //         max = students[i].T + students[i].P;
-    //     }
-    //
-    //     if (students[i].T + students[i].W > max)
-    //     {
-    //         max = students[i].T + students[i].W;
-    //     }
-    // }
-
-    int curTime = 0;
+    int max = 0;
     for (int i = 0; i < n; i++)
     {
-        // sleep if time left
-        if (students[i].T > curTime)
+        if (students[i].T + students[i].P > max)
         {
-            sleep(students[i].T - curTime);
-            curTime = students[i].T;
+            max = students[i].T + students[i].P;
         }
 
-        enqueue(waiting, i);
-
-        int toRun = waiting->front->data;
-        // get lock
-        pthread_mutex_lock(&washingMachinesMutex);
-        if (washingMachines > 0)
+        if (students[i].T + students[i].W > max)
         {
-            // run
-            washingMachines--;
-            pthread_mutex_unlock(&washingMachinesMutex);
-
-            // unlock the student
-            pthread_mutex_unlock(students[toRun].mutex);
-
-            // remove from waiting queue
-            dequeue(waiting);
+            max = students[i].T + students[i].W;
         }
-        else
-        {
-            pthread_mutex_unlock(&washingMachinesMutex);
-        }
+    }
+
+    curTime = 0;
+
+    for (int i = 0; i < n; i++)
+    {
+        struct student *threadInfo = (struct student *)malloc(sizeof(struct student));
+        threadInfo->index = students[i].index;
+        threadInfo->T = students[i].T;
+        threadInfo->W = students[i].W;
+        threadInfo->P = students[i].P;
+        threadInfo->mutex = students[i].mutex;
+        pthread_create(&students[i].thread, NULL, studentIn, (void *)threadInfo);
+    }
+
+    for (int t = 0; t <= max; t++)
+    {
+        pthread_mutex_lock(&timeMutex);
+        curTime = t;
+        pthread_mutex_unlock(&timeMutex);
+        sleep(1);
+    }
+    // join all
+    for (int i = 0; i < n; i++)
+    {
+        pthread_join(students[i].thread, NULL);
     }
 
     // destroy
