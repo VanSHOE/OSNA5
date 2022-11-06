@@ -92,7 +92,7 @@ struct student
     int T;      // T is the time at which student arrives
     int W;      // W is the time required by student to use the washing machine
     int P;      // P is the time after which student will leave without using the washing machine
-    int status; // 0 for waiting, 1 for using washing machine, 2 for done
+    int status; // 0 for waiting to be created, 1 for waiting for washing machine, 2 for using washing machine, 3 for done
     pthread_mutex_t *mutex;
     pthread_t thread;
     pthread_cond_t wakeUp;
@@ -103,15 +103,25 @@ void *studentIn(void *arg)
 {
     struct student *studentInfo = (struct student *)arg;
     // wait on condition variable
-    struct timespec endTime;
-    endTime.tv_sec = curTime + studentInfo->P;
-    endTime.tv_nsec = 0;
 
     // wait for entry
     pthread_mutex_lock(studentInfo->mutex);
     if (studentInfo->status == 0)
     {
+        pthread_cond_wait(&studentInfo->wakeUp, studentInfo->mutex);
+        pthread_mutex_unlock(studentInfo->mutex);
+    }
+
+    // wait for washing machine
+    struct timespec endTime;
+    endTime.tv_sec = curTime + studentInfo->P;
+    endTime.tv_nsec = 0;
+
+    pthread_mutex_lock(studentInfo->mutex);
+    if (studentInfo->status == 1)
+    {
         int result = pthread_cond_timedwait(&studentInfo->wakeUp, studentInfo->mutex, &endTime);
+        pthread_mutex_unlock(studentInfo->mutex);
         if (result == ETIMEDOUT)
         {
             red();
@@ -131,7 +141,14 @@ void *studentIn(void *arg)
             return NULL;
         }
     }
-    pthread_mutex_unlock(studentInfo->mutex);
+
+    // use washing machine
+    sleep(studentInfo->W);
+
+    // release washing machine
+    pthread_mutex_lock(&washingMachinesMutex);
+    washingMachines++;
+    pthread_mutex_unlock(&washingMachinesMutex);
 
     free(studentInfo);
 }
@@ -287,8 +304,20 @@ int main()
     pthread_t queueHandler;
     pthread_create(&queueHandler, NULL, queueThread, NULL);
 
-    for (int i = 0; i < n; i++)
+    for (int i = 0; i < n;)
     {
+        pthread_mutex_lock(&timeMutex);
+        pthread_mutex_lock(students[i].mutex);
+        if (students[i].T <= curTime)
+        {
+            enqueue(waiting, i);
+            students[i].status = 1;
+            pthread_mutex_unlock(students[i++].mutex);
+            pthread_mutex_unlock(&timeMutex);
+            continue;
+        }
+        pthread_mutex_unlock(students[i].mutex);
+        pthread_mutex_unlock(&timeMutex);
     }
 
     for (int i = 0; i < n; i++)
