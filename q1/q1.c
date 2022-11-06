@@ -111,6 +111,7 @@ void *studentIn(void *arg)
         pthread_cond_wait(&studentInfo->wakeUp, studentInfo->mutex);
         pthread_mutex_unlock(studentInfo->mutex);
     }
+    printf("%d: Student %d arrives\n", curTime, studentInfo->index);
 
     // wait for washing machine
     struct timespec endTime;
@@ -143,9 +144,11 @@ void *studentIn(void *arg)
     }
 
     // use washing machine
+    printf("%d: Student %d starts washing\n", curTime, studentInfo->index);
     sleep(studentInfo->W);
 
     // release washing machine
+    printf("%d: Student %d leaves after washing\n", curTime, studentInfo->index);
     pthread_mutex_lock(&washingMachinesMutex);
     washingMachines++;
     pthread_mutex_unlock(&washingMachinesMutex);
@@ -182,6 +185,7 @@ void *timerThread(void *arg)
         {
             pthread_mutex_lock(&timeMutex);
             curTime++;
+            // printf("In timerThread: %d\n", curTime);
             pthread_mutex_unlock(&timeMutex);
             start = ts.tv_sec;
         }
@@ -197,7 +201,9 @@ void *queueThread(void *arg)
         int curTimeCopy = curTime;
         pthread_mutex_unlock(&timeMutex);
 
+        // printf("Trying lock\n");
         pthread_mutex_lock(&washingMachinesMutex);
+        // printf("Got lock\n");
         if (!washingMachines)
         {
             pthread_mutex_unlock(&washingMachinesMutex);
@@ -207,15 +213,18 @@ void *queueThread(void *arg)
         int data = dequeue(waiting);
         if (data == -1)
         {
+            pthread_mutex_unlock(&washingMachinesMutex);
             continue;
         }
 
         // lock
-        pthread_mutex_lock(&students[data].mutex);
+        // printf("Trying lock\n");
+        pthread_mutex_lock(students[data].mutex);
+        // printf("Got lock\n");
         pthread_cond_signal(&students[data].wakeUp);
         students[data].status = 2;
         washingMachines--;
-        pthread_mutex_unlock(&students[data].mutex);
+        pthread_mutex_unlock(students[data].mutex);
         pthread_mutex_unlock(&washingMachinesMutex);
     }
 }
@@ -267,6 +276,7 @@ int main()
         pthread_cond_init(&students[i].wakeUp, NULL);
     }
 
+    // printf("Inputting done\n");
     // sort the students array on T
     qsort(students, n, sizeof(struct student), cmpfunc);
 
@@ -306,11 +316,13 @@ int main()
 
     for (int i = 0; i < n;)
     {
+
         pthread_mutex_lock(&timeMutex);
         pthread_mutex_lock(students[i].mutex);
         if (students[i].T <= curTime)
         {
             enqueue(waiting, i);
+            printf("In main curTime: %d for student: %d\n", curTime, students[i].index);
             students[i].status = 1;
             pthread_mutex_unlock(students[i++].mutex);
             pthread_mutex_unlock(&timeMutex);
