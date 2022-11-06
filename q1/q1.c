@@ -95,7 +95,7 @@ struct student
     int status; // 0 for waiting to be created, 1 for waiting for washing machine, 2 for using washing machine, 3 for done
     pthread_mutex_t *mutex;
     pthread_t thread;
-    pthread_cond_t wakeUp;
+    sem_t *wakeUp;
 };
 struct student *students;
 
@@ -105,12 +105,25 @@ void *studentIn(void *arg)
     // wait on condition variable
 
     // wait for entry
+    printf("Student %d reporting for duty\n", studentInfo->index);
+
+    // lock
     pthread_mutex_lock(studentInfo->mutex);
     if (studentInfo->status == 0)
     {
-        pthread_cond_wait(&studentInfo->wakeUp, studentInfo->mutex);
+        // unlock
+        pthread_mutex_unlock(studentInfo->mutex);
+        // printf("Student %d waiting to be created\n", studentInfo->index);
+
+        sem_wait(studentInfo->wakeUp);
+        printf("Wait over\n");
+    }
+    else
+    {
+        // unlock
         pthread_mutex_unlock(studentInfo->mutex);
     }
+
     printf("%d: Student %d arrives\n", curTime, studentInfo->index);
 
     // wait for washing machine
@@ -200,7 +213,6 @@ void *queueThread(void *arg)
         pthread_mutex_lock(&timeMutex);
         int curTimeCopy = curTime;
         pthread_mutex_unlock(&timeMutex);
-
         // printf("Trying lock\n");
         pthread_mutex_lock(&washingMachinesMutex);
         // printf("Got lock\n");
@@ -210,18 +222,21 @@ void *queueThread(void *arg)
             continue;
         }
 
+        // printf("Yaar\n");
         int data = dequeue(waiting);
         if (data == -1)
         {
+            // printf("nothing\n");
             pthread_mutex_unlock(&washingMachinesMutex);
             continue;
         }
-
+        // printf("Something\n");
         // lock
         // printf("Trying lock\n");
         pthread_mutex_lock(students[data].mutex);
         // printf("Got lock\n");
-        pthread_cond_signal(&students[data].wakeUp);
+        // printf("Signalling student %d\n", students[data].index);
+        sem_post(students[data].wakeUp);
         students[data].status = 2;
         washingMachines--;
         pthread_mutex_unlock(students[data].mutex);
@@ -266,6 +281,7 @@ int main()
         scanf("%d %d %d", &students[i].T, &students[i].W, &students[i].P);
 
         students[i].mutex = (pthread_mutex_t *)malloc(sizeof(pthread_mutex_t));
+        students[i].wakeUp = (sem_t *)malloc(sizeof(sem_t));
         if (students[i].mutex == NULL)
         {
             printf("Error allocating memory\n");
@@ -273,7 +289,8 @@ int main()
         }
         students[i].status = 0;
         pthread_mutex_init(students[i].mutex, NULL);
-        pthread_cond_init(&students[i].wakeUp, NULL);
+        // init sem
+        sem_init(students[i].wakeUp, 0, 0);
     }
 
     // printf("Inputting done\n");
@@ -305,6 +322,7 @@ int main()
         threadInfo->W = students[i].W;
         threadInfo->P = students[i].P;
         threadInfo->mutex = students[i].mutex;
+        threadInfo->wakeUp = students[i].wakeUp;
         pthread_create(&students[i].thread, NULL, studentIn, (void *)threadInfo);
     }
 
@@ -322,7 +340,7 @@ int main()
         if (students[i].T <= curTime)
         {
             enqueue(waiting, i);
-            printf("In main curTime: %d for student: %d\n", curTime, students[i].index);
+            // printf("In main curTime: %d for student: %d\n", curTime, students[i].index);
             students[i].status = 1;
             pthread_mutex_unlock(students[i++].mutex);
             pthread_mutex_unlock(&timeMutex);
