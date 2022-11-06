@@ -4,6 +4,7 @@
 #include <semaphore.h>
 #include <unistd.h>
 #include <time.h>
+#include <errno.h>
 #include "../colors.h"
 
 int curTime;
@@ -59,7 +60,7 @@ int dequeue(struct queue *q)
     pthread_mutex_lock(&q->waitingMutex);
     if (q->front == NULL)
     {
-        printf("Queue is empty\n");
+        // printf("Queue is empty\n");
         pthread_mutex_unlock(&q->waitingMutex);
         return -1;
     }
@@ -85,21 +86,52 @@ struct queue *waiting;
 
 int washingMachines;
 pthread_mutex_t washingMachinesMutex;
-
 struct student
 {
     int index;
-    int T; // T is the time at which student arrives
-    int W; // W is the time required by student to use the washing machine
-    int P; // P is the time after which student will leave without using the washing machine
+    int T;      // T is the time at which student arrives
+    int W;      // W is the time required by student to use the washing machine
+    int P;      // P is the time after which student will leave without using the washing machine
+    int status; // 0 for waiting, 1 for using washing machine, 2 for done
     pthread_mutex_t *mutex;
     pthread_t thread;
+    pthread_cond_t wakeUp;
 };
 struct student *students;
 
 void *studentIn(void *arg)
 {
     struct student *studentInfo = (struct student *)arg;
+    // wait on condition variable
+    struct timespec endTime;
+    endTime.tv_sec = curTime + studentInfo->P;
+    endTime.tv_nsec = 0;
+
+    // wait for entry
+    pthread_mutex_lock(studentInfo->mutex);
+    if (studentInfo->status == 0)
+    {
+        int result = pthread_cond_timedwait(&studentInfo->wakeUp, studentInfo->mutex, &endTime);
+        if (result == ETIMEDOUT)
+        {
+            red();
+            printf("Student %d leaves without washing\n", studentInfo->index);
+            reset();
+            free(studentInfo);
+            return NULL;
+        }
+
+        // return if any other error
+        if (result != 0)
+        {
+            red();
+            printf("Error in pthread_cond_timedwait: %d\n", result);
+            reset();
+            free(studentInfo);
+            return NULL;
+        }
+    }
+    pthread_mutex_unlock(studentInfo->mutex);
 
     free(studentInfo);
 }
@@ -113,6 +145,62 @@ int cmpfunc(const void *a, const void *b)
     }
 
     return val1;
+}
+
+void *timerThread(void *arg)
+{
+    time_t start;
+    struct timespec ts;
+    clock_gettime(CLOCK_REALTIME, &ts);
+    start = ts.tv_sec;
+
+    pthread_mutex_lock(&timeMutex);
+    curTime = 0;
+    pthread_mutex_unlock(&timeMutex);
+
+    while (1)
+    {
+        clock_gettime(CLOCK_REALTIME, &ts);
+        if (ts.tv_sec - start >= 1)
+        {
+            pthread_mutex_lock(&timeMutex);
+            curTime++;
+            pthread_mutex_unlock(&timeMutex);
+            start = ts.tv_sec;
+        }
+    }
+}
+
+void *queueThread(void *arg)
+{
+    // activate thread in the front
+    while (1)
+    {
+        pthread_mutex_lock(&timeMutex);
+        int curTimeCopy = curTime;
+        pthread_mutex_unlock(&timeMutex);
+
+        pthread_mutex_lock(&washingMachinesMutex);
+        if (!washingMachines)
+        {
+            pthread_mutex_unlock(&washingMachinesMutex);
+            continue;
+        }
+
+        int data = dequeue(waiting);
+        if (data == -1)
+        {
+            continue;
+        }
+
+        // lock
+        pthread_mutex_lock(&students[data].mutex);
+        pthread_cond_signal(&students[data].wakeUp);
+        students[data].status = 2;
+        washingMachines--;
+        pthread_mutex_unlock(&students[data].mutex);
+        pthread_mutex_unlock(&washingMachinesMutex);
+    }
 }
 
 int main()
@@ -157,29 +245,30 @@ int main()
             printf("Error allocating memory\n");
             exit(1);
         }
-
+        students[i].status = 0;
         pthread_mutex_init(students[i].mutex, NULL);
+        pthread_cond_init(&students[i].wakeUp, NULL);
     }
 
     // sort the students array on T
     qsort(students, n, sizeof(struct student), cmpfunc);
 
     // find max time till which we need to simulate
-    int max = 0;
-    for (int i = 0; i < n; i++)
-    {
-        if (students[i].T + students[i].P > max)
-        {
-            max = students[i].T + students[i].P;
-        }
+    // int max = 0;
+    // for (int i = 0; i < n; i++)
+    // {
+    //     if (students[i].T + students[i].P > max)
+    //     {
+    //         max = students[i].T + students[i].P;
+    //     }
+    //
+    //     if (students[i].T + students[i].W > max)
+    //     {
+    //         max = students[i].T + students[i].W;
+    //     }
+    // }
 
-        if (students[i].T + students[i].W > max)
-        {
-            max = students[i].T + students[i].W;
-        }
-    }
-
-    curTime = 0;
+    curTime = -1;
 
     for (int i = 0; i < n; i++)
     {
@@ -192,18 +281,24 @@ int main()
         pthread_create(&students[i].thread, NULL, studentIn, (void *)threadInfo);
     }
 
-    for (int t = 0; t <= max; t++)
+    pthread_t timer;
+    pthread_create(&timer, NULL, timerThread, NULL);
+
+    pthread_t queueHandler;
+    pthread_create(&queueHandler, NULL, queueThread, NULL);
+
+    for (int i = 0; i < n; i++)
     {
-        pthread_mutex_lock(&timeMutex);
-        curTime = t;
-        pthread_mutex_unlock(&timeMutex);
-        sleep(1);
     }
-    // join all
+
     for (int i = 0; i < n; i++)
     {
         pthread_join(students[i].thread, NULL);
     }
+
+    // kill leftover threads
+    pthread_cancel(timer);
+    pthread_cancel(queueHandler);
 
     // destroy
     pthread_mutex_destroy(&washingMachinesMutex);
