@@ -137,9 +137,11 @@ void *studentIn(void *arg)
 
     int result = sem_timedwait(studentInfo->wakeUp, &endTime);
 
-    if (result == -1 && errno == ETIMEDOUT)
+    if ((result == -1 && errno == ETIMEDOUT) || curTime > studentInfo->P + cameAt)
     {
         red();
+        printf("%d: Student %d leaves without washing\n", curTime - 1, studentInfo->index + 1);
+        reset();
         pthread_mutex_lock(&couldntWashtMutex);
         couldntWash++;
         pthread_mutex_unlock(&couldntWashtMutex);
@@ -147,8 +149,6 @@ void *studentIn(void *arg)
         totalSecondsWasted += studentInfo->P;
         pthread_mutex_unlock(&totalSecondsWastedMutex);
 
-        printf("%d: Student %d leaves without washing\n", curTime, studentInfo->index + 1);
-        reset();
         studentInfo->invalid = 1;
         return NULL;
     }
@@ -158,7 +158,9 @@ void *studentIn(void *arg)
     totalSecondsWasted += curTime - cameAt;
     pthread_mutex_unlock(&totalSecondsWastedMutex);
 
-    printf("%d: Student %d starts washing for %d seconds.\n", curTime, studentInfo->index + 1, studentInfo->W);
+    green();
+    printf("%d: Student %d starts washing.\n", curTime, studentInfo->index + 1);
+    reset();
     // sleep(studentInfo->W);
     int timePassed = 0;
     // use cond variable timeCond
@@ -171,7 +173,9 @@ void *studentIn(void *arg)
     }
 
     // release washing machine
-    printf("%d: Student %d leaves after washing\n", curTime - 1, studentInfo->index + 1);
+    yellow();
+    printf("%d: Student %d leaves after washing\n", curTime, studentInfo->index + 1);
+    reset();
     pthread_mutex_lock(&washingMachinesMutex);
     washingMachines++;
     pthread_mutex_unlock(&washingMachinesMutex);
