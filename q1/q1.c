@@ -9,6 +9,7 @@
 
 int curTime;
 pthread_mutex_t timeMutex;
+pthread_cond_t timeCond;
 
 struct queueNode
 {
@@ -136,14 +137,22 @@ void *studentIn(void *arg)
 
     // use washing machine
     printf("%d: Student %d starts washing for %d seconds.\n", curTime, studentInfo->index + 1, studentInfo->W);
-    sleep(studentInfo->W);
+    // sleep(studentInfo->W);
+    int timePassed = 0;
+    // use cond variable timeCond
+    while (timePassed < studentInfo->W)
+    {
+        pthread_mutex_lock(&timeMutex);
+        pthread_cond_wait(&timeCond, &timeMutex);
+        timePassed++;
+        pthread_mutex_unlock(&timeMutex);
+    }
 
     // release washing machine
-
+    printf("%d: Student %d leaves after washing\n", curTime - 1, studentInfo->index + 1);
     pthread_mutex_lock(&washingMachinesMutex);
     washingMachines++;
     pthread_mutex_unlock(&washingMachinesMutex);
-    printf("%d: Student %d leaves after washing\n", curTime, studentInfo->index + 1);
 }
 
 int cmpfunc(const void *a, const void *b)
@@ -175,6 +184,7 @@ void *timerThread(void *arg)
         {
             pthread_mutex_lock(&timeMutex);
             curTime++;
+            pthread_cond_broadcast(&timeCond);
             // printf("In timerThread: %d\n", curTime);
             pthread_mutex_unlock(&timeMutex);
             start = ts.tv_sec;
@@ -238,6 +248,8 @@ int main()
     pthread_mutex_lock(&washingMachinesMutex);
     washingMachines = m;
     pthread_mutex_unlock(&washingMachinesMutex);
+
+    pthread_cond_init(&timeCond, NULL);
 
     students = (struct student *)malloc(n * sizeof(struct student));
 
