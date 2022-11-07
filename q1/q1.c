@@ -7,6 +7,12 @@
 #include <errno.h>
 #include "../colors.h"
 
+int couldntWash;
+pthread_mutex_t couldntWashtMutex;
+
+int totalSecondsWasted;
+pthread_mutex_t totalSecondsWastedMutex;
+
 int curTime;
 pthread_mutex_t timeMutex;
 pthread_cond_t timeCond;
@@ -111,14 +117,19 @@ void *studentIn(void *arg)
 
     sem_wait(studentInfo->wakeUp);
 
-    printf("%d: Student %d arrives\n", curTime, studentInfo->index + 1);
-
-    // wait for washing machine
-    // get clockrealtime time
     time_t start;
     struct timespec ts;
     clock_gettime(CLOCK_REALTIME, &ts);
     start = ts.tv_sec;
+    printf("%d: Student %d arrives\n", curTime, studentInfo->index + 1);
+
+    pthread_mutex_lock(&timeMutex);
+    int cameAt = curTime;
+    pthread_mutex_unlock(&timeMutex);
+
+    // wait for washing machine
+    // get clockrealtime time
+
     // printf("Start time: %ld\n", start);
     struct timespec endTime;
     endTime.tv_sec = start + studentInfo->P + 1;
@@ -129,6 +140,13 @@ void *studentIn(void *arg)
     if (result == -1 && errno == ETIMEDOUT)
     {
         red();
+        pthread_mutex_lock(&couldntWashtMutex);
+        couldntWash++;
+        pthread_mutex_unlock(&couldntWashtMutex);
+        pthread_mutex_lock(&totalSecondsWastedMutex);
+        totalSecondsWasted += studentInfo->P;
+        pthread_mutex_unlock(&totalSecondsWastedMutex);
+
         printf("%d: Student %d leaves without washing\n", curTime, studentInfo->index + 1);
         reset();
         studentInfo->invalid = 1;
@@ -136,6 +154,10 @@ void *studentIn(void *arg)
     }
 
     // use washing machine
+    pthread_mutex_lock(&totalSecondsWastedMutex);
+    totalSecondsWasted += curTime - cameAt;
+    pthread_mutex_unlock(&totalSecondsWastedMutex);
+
     printf("%d: Student %d starts washing for %d seconds.\n", curTime, studentInfo->index + 1, studentInfo->W);
     // sleep(studentInfo->W);
     int timePassed = 0;
@@ -240,6 +262,8 @@ int main()
         exit(1);
     }
 
+    pthread_mutex_init(&couldntWashtMutex, NULL);
+    pthread_mutex_init(&totalSecondsWastedMutex, NULL);
     pthread_mutex_init(&timeMutex, NULL);
 
     initQueue(waiting);
@@ -283,32 +307,11 @@ int main()
     // sort the students array on T
     qsort(students, n, sizeof(struct student), cmpfunc);
 
-    // find max time till which we need to simulate
-    // int max = 0;
-    // for (int i = 0; i < n; i++)
-    // {
-    //     if (students[i].T + students[i].P > max)
-    //     {
-    //         max = students[i].T + students[i].P;
-    //     }
-    //
-    //     if (students[i].T + students[i].W > max)
-    //     {
-    //         max = students[i].T + students[i].W;
-    //     }
-    // }
-
     curTime = -1;
 
     for (int i = 0; i < n; i++)
     {
         struct student *threadInfo = &students[i];
-        // threadInfo->index = students[i].index;
-        // threadInfo->T = students[i].T;
-        // threadInfo->W = students[i].W;
-        // threadInfo->P = students[i].P;
-        // threadInfo->mutex = students[i].mutex;
-        // threadInfo->wakeUp = students[i].wakeUp;
         pthread_create(&students[i].thread, NULL, studentIn, (void *)threadInfo);
     }
 
@@ -351,6 +354,17 @@ int main()
     for (int i = 0; i < n; i++)
     {
         pthread_mutex_destroy(students[i].mutex);
+    }
+
+    printf("%d\n%d\n", couldntWash, totalSecondsWasted);
+
+    if (4 * couldntWash >= n)
+    {
+        printf("Yes\n");
+    }
+    else
+    {
+        printf("No\n");
     }
 
     return 0;
