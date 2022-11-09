@@ -7,12 +7,14 @@
 #include <errno.h>
 #include "../colors.h"
 
+int chefs, pizzaVars, limIngs, customers, ovens, time2ReachPickup;
 int curTime;
 pthread_mutex_t timeMutex;
 pthread_cond_t timeCond;
 
 struct pizza *pizzaInfo;
 struct chef *chefInfo;
+
 struct customer *customerInfo;
 int *ingrAmt;
 
@@ -27,14 +29,19 @@ struct chef
 {
     int entry;
     int exit;
+    int assignedPizza;
+    pthread_mutex_t *mutex;
     pthread_t thread;
+    sem_t *wakeUp;
 };
 
 struct orders
 {
     int pizzas;
     int *pizzaIDs;
+    struct customer *owner;
     pthread_t thread;
+    sem_t *wakeUp;
 };
 
 struct customer
@@ -53,6 +60,45 @@ pthread_mutex_t customerLock;
 pthread_mutex_t ingrLock;
 
 sem_t driveQueue;
+sem_t ovensQueue;
+
+void *chefFunc(void *arg)
+{
+    struct chef *me = (struct chef *)arg;
+}
+
+void *ordersFunc(void *arg)
+{
+    struct orders *me = (struct orders *)arg;
+    int totalAcceptedPizzas = 0;
+    // go through chefs that are available rn
+    for (int pizzaIdx = 0; pizzaIdx < me->pizzas; pizzaIdx++)
+    {
+        int assignedChef = 0;
+        for (int i = 0; i < chefs; i++)
+        {
+            pthread_mutex_lock(chefInfo[i].mutex);
+            if (chefInfo[i].entry <= curTime && chefInfo[i].exit > curTime + pizzaInfo[me->pizzaIDs[pizzaIdx]].t && chefInfo[i].assignedPizza == -1)
+            {
+                assignedChef = 1;
+                totalAcceptedPizzas++;
+
+                chefInfo[i].assignedPizza = me->pizzaIDs[pizzaIdx];
+
+                sem_post(chefInfo[i].wakeUp);
+            }
+            pthread_mutex_unlock(chefInfo[i].mutex);
+
+            if (assignedChef)
+                break;
+        }
+    }
+
+    for (int i = 0; i < totalAcceptedPizzas; i++)
+    {
+        sem_wait(me->wakeUp);
+    }
+}
 
 void *customersFunc(void *arg)
 {
@@ -62,6 +108,8 @@ void *customersFunc(void *arg)
 
     // wait for entry
     sem_wait(&driveQueue);
+    // create order thread
+    pthread_create(&me->order.thread, NULL, ordersFunc, &me->order);
 }
 
 void *timerThread(void *arg)
@@ -104,13 +152,15 @@ int customerCompare(const void *a, const void *b)
 
 int main()
 {
-    int chefs, pizzaVars, limIngs, customers, ovens, time2ReachPickup;
+
     scanf("%d %d %d %d %d %d", &chefs, &pizzaVars, &limIngs, &customers, &ovens, &time2ReachPickup);
     pizzaInfo = (struct pizza *)malloc(sizeof(struct pizza) * pizzaVars);
     chefInfo = (struct chef *)malloc(sizeof(struct chef) * chefs);
     customerInfo = (struct customer *)malloc(sizeof(struct customer) * customers);
     ingrAmt = (int *)malloc(sizeof(int) * limIngs);
     sem_init(&driveQueue, 0, time2ReachPickup);
+    sem_init(&ovensQueue, 0, ovens);
+
     curTime = -1;
     pthread_mutex_init(&timeMutex, NULL);
     pthread_cond_init(&timeCond, NULL);
@@ -146,6 +196,11 @@ int main()
         scanf("%d %d", &entry, &exit);
         chefInfo[i].entry = entry;
         chefInfo[i].exit = exit;
+        chefInfo[i].assignedPizza = -1;
+        chefInfo[i].mutex = (pthread_mutex_t *)malloc(sizeof(pthread_mutex_t));
+        sem_init(chefInfo[i].wakeUp, 0, 0);
+        pthread_mutex_init(chefInfo[i].mutex, NULL);
+        pthread_create(&chefInfo[i].thread, NULL, chefFunc, &chefInfo[i]);
     }
 
     for (int i = 0; i < customers; i++)
@@ -162,10 +217,13 @@ int main()
 
         pthread_mutex_init(customerInfo[i].mutex, NULL);
         sem_init(customerInfo[i].wakeUp, 0, 0);
+        sem_init(&customerInfo[i].order.wakeUp, 0, 0);
         for (int j = 0; j < pizzas; j++)
         {
             scanf("%d", &customerInfo[i].order.pizzaIDs[j]);
         }
+
+        customerInfo[i].order.owner = &customerInfo[i];
     }
 
     qsort(customerInfo, customers, sizeof(struct customer), customerCompare);
