@@ -7,7 +7,7 @@
 #include <errno.h>
 #include "../colors.h"
 
-int chefs, pizzaVars, limIngs, customers, ovens, time2ReachPickup;
+int chefs, pizzaVars, limIngs, customers, ovens, time2ReachPickup, s = 10;
 int curTime;
 pthread_mutex_t timeMutex;
 pthread_cond_t timeCond;
@@ -30,6 +30,7 @@ struct chef
     int entry;
     int exit;
     int assignedPizza;
+    struct orders *callBackOrder;
     pthread_mutex_t *mutex;
     pthread_t thread;
     sem_t *wakeUp;
@@ -39,6 +40,7 @@ struct orders
 {
     int pizzas;
     int *pizzaIDs;
+    int *results;
     struct customer *owner;
     pthread_t thread;
     sem_t *wakeUp;
@@ -65,6 +67,80 @@ sem_t ovensQueue;
 void *chefFunc(void *arg)
 {
     struct chef *me = (struct chef *)arg;
+
+    while (1)
+    {
+        int res = sem_timedwait(me->wakeUp, &(struct timespec){.tv_sec = me->exit - curTime, .tv_nsec = 0});
+
+        // terminate if time is up
+        if (res == -1 && errno == ETIMEDOUT)
+        {
+            sem_post(me->callBackOrder->wakeUp);
+            return;
+        }
+
+        // check of ingrds
+        pthread_mutex_lock(&(ingrLock));
+
+        int enoughIngr = 1;
+        for (int ingrIdx = 0; ingrIdx < limIngs; ingrIdx++)
+        {
+            if (ingrAmt[ingrIdx] < pizzaInfo[me->assignedPizza].ingr[ingrIdx])
+            {
+                enoughIngr = 0;
+                break;
+            }
+        }
+
+        sleep(3);
+        // use ingrs
+        if (enoughIngr)
+        {
+            for (int ingrIdx = 0; ingrIdx < limIngs; ingrIdx++)
+            {
+                ingrAmt[ingrIdx] -= pizzaInfo[me->assignedPizza].ingr[ingrIdx];
+            }
+        }
+        else
+        {
+            pthread_mutex_unlock(&(ingrLock));
+            sem_post(me->callBackOrder->wakeUp);
+            me->assignedPizza = -1;
+            me->callBackOrder = NULL;
+            continue;
+        }
+
+        pthread_mutex_unlock(&(ingrLock));
+
+        res = sem_timedwait(&(ovensQueue), &(struct timespec){.tv_sec = me->exit - curTime, .tv_nsec = 0});
+
+        // terminate if time is up
+        if (res == -1 && errno == ETIMEDOUT)
+        {
+            sem_post(me->callBackOrder->wakeUp);
+            return;
+        }
+
+        // cook pizza
+        // check if time left
+        if (me->exit - curTime < pizzaInfo[me->assignedPizza].t)
+        {
+            sem_post(&(ovensQueue));
+            sem_post(me->callBackOrder->wakeUp);
+            me->assignedPizza = -1;
+            me->callBackOrder = NULL;
+            continue;
+        }
+
+        sleep(pizzaInfo[me->assignedPizza].t - 3);
+        sem_post(&(ovensQueue));
+
+        // set result of callback
+        me->callBackOrder->results[me->assignedPizza] = 1;
+        sem_post(me->callBackOrder->wakeUp);
+        me->assignedPizza = -1;
+        me->callBackOrder = NULL;
+    }
 }
 
 void *ordersFunc(void *arg)
@@ -75,6 +151,24 @@ void *ordersFunc(void *arg)
     for (int pizzaIdx = 0; pizzaIdx < me->pizzas; pizzaIdx++)
     {
         int assignedChef = 0;
+        // check if enough ingredients
+        pthread_mutex_lock(&ingrLock);
+        int enoughIngr = 1;
+        for (int ingrIdx = 0; ingrIdx < limIngs; ingrIdx++)
+        {
+            if (ingrAmt[ingrIdx] < pizzaInfo[me->pizzaIDs[pizzaIdx]].ingr[ingrIdx])
+            {
+                enoughIngr = 0;
+                break;
+            }
+        }
+        pthread_mutex_unlock(&ingrLock);
+
+        if (!enoughIngr)
+        {
+            continue;
+        }
+
         for (int i = 0; i < chefs; i++)
         {
             pthread_mutex_lock(chefInfo[i].mutex);
@@ -83,6 +177,7 @@ void *ordersFunc(void *arg)
                 assignedChef = 1;
                 totalAcceptedPizzas++;
 
+                chefInfo[i].callBackOrder = me;
                 chefInfo[i].assignedPizza = me->pizzaIDs[pizzaIdx];
 
                 sem_post(chefInfo[i].wakeUp);
@@ -98,6 +193,8 @@ void *ordersFunc(void *arg)
     {
         sem_wait(me->wakeUp);
     }
+
+    sem_post(&(me->owner->wakeUp));
 }
 
 void *customersFunc(void *arg)
@@ -110,6 +207,24 @@ void *customersFunc(void *arg)
     sem_wait(&driveQueue);
     // create order thread
     pthread_create(&me->order.thread, NULL, ordersFunc, &me->order);
+
+    sem_wait(me->wakeUp);
+
+    // check if any pizza was made
+    int anyPizza = 0;
+    for (int i = 0; i < me->order.pizzas; i++)
+    {
+        if (me->order.results[i] == 1)
+        {
+            anyPizza = 1;
+            break;
+        }
+    }
+
+    if (!anyPizza)
+    {
+        return;
+    }
 }
 
 void *timerThread(void *arg)
@@ -218,9 +333,12 @@ int main()
         pthread_mutex_init(customerInfo[i].mutex, NULL);
         sem_init(customerInfo[i].wakeUp, 0, 0);
         sem_init(&customerInfo[i].order.wakeUp, 0, 0);
+        // setup results
+        customerInfo[i].order.results = (int *)malloc(sizeof(int) * pizzas);
         for (int j = 0; j < pizzas; j++)
         {
             scanf("%d", &customerInfo[i].order.pizzaIDs[j]);
+            customerInfo[i].order.results[j] = 0;
         }
 
         customerInfo[i].order.owner = &customerInfo[i];
@@ -259,6 +377,13 @@ int main()
     {
         pthread_join(customerInfo[i].thread, NULL);
     }
+
+    // wait for chefs
+    for (int i = 0; i < chefs; i++)
+    {
+        pthread_join(chefInfo[i].thread, NULL);
+    }
+
     pthread_cancel(timer);
 
     printf("Simulation Ended\n");
