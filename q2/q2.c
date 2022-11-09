@@ -28,6 +28,7 @@ struct pizza
 struct chef
 {
     int entry;
+    int index;
     int exit;
     int assignedPizza;
     struct orders *callBackOrder;
@@ -68,15 +69,32 @@ void *chefFunc(void *arg)
 {
     struct chef *me = (struct chef *)arg;
 
+    pthread_mutex_lock(&timeMutex);
+    while (curTime < me->entry)
+    {
+        pthread_cond_wait(&timeCond, &timeMutex);
+    }
+    pthread_mutex_unlock(&timeMutex);
+
+    printf("Chef %d arrives at time %d.\n", me->index, curTime);
+
     while (1)
     {
-        int res = sem_timedwait(me->wakeUp, &(struct timespec){.tv_sec = me->exit - curTime, .tv_nsec = 0});
-
+        printf("Exit of Chef %d is %d and I should stay for %d\n", me->index, me->exit, me->exit - curTime);
+        // get current time
+        time_t start;
+        struct timespec ts;
+        clock_gettime(CLOCK_REALTIME, &ts);
+        start = ts.tv_sec;
+        int res = sem_timedwait(me->wakeUp, &(struct timespec){.tv_sec = me->exit - curTime + start, .tv_nsec = 0});
         // terminate if time is up
         if (res == -1 && errno == ETIMEDOUT)
         {
-            sem_post(me->callBackOrder->wakeUp);
-            return;
+            if (me->callBackOrder)
+                sem_post(me->callBackOrder->wakeUp);
+
+            printf("Chef %d exits at time here %d.\n", me->index, curTime);
+            return NULL;
         }
 
         // check of ingrds
@@ -85,7 +103,7 @@ void *chefFunc(void *arg)
         int enoughIngr = 1;
         for (int ingrIdx = 0; ingrIdx < limIngs; ingrIdx++)
         {
-            if (ingrAmt[ingrIdx] < pizzaInfo[me->assignedPizza].ingr[ingrIdx])
+            if (ingrAmt[ingrIdx] < pizzaInfo[me->assignedPizza - 1].ingr[ingrIdx])
             {
                 enoughIngr = 0;
                 break;
@@ -98,7 +116,7 @@ void *chefFunc(void *arg)
         {
             for (int ingrIdx = 0; ingrIdx < limIngs; ingrIdx++)
             {
-                ingrAmt[ingrIdx] -= pizzaInfo[me->assignedPizza].ingr[ingrIdx];
+                ingrAmt[ingrIdx] -= pizzaInfo[me->assignedPizza - 1].ingr[ingrIdx];
             }
         }
         else
@@ -111,19 +129,21 @@ void *chefFunc(void *arg)
         }
 
         pthread_mutex_unlock(&(ingrLock));
+        clock_gettime(CLOCK_REALTIME, &ts);
+        start = ts.tv_sec;
 
-        res = sem_timedwait(&(ovensQueue), &(struct timespec){.tv_sec = me->exit - curTime, .tv_nsec = 0});
-
+        res = sem_timedwait(&(ovensQueue), &(struct timespec){.tv_sec = me->exit - curTime + start, .tv_nsec = 0});
         // terminate if time is up
         if (res == -1 && errno == ETIMEDOUT)
         {
             sem_post(me->callBackOrder->wakeUp);
-            return;
+            printf("Chef %d exits at time %d.\n", me->index, curTime);
+            return NULL;
         }
 
         // cook pizza
         // check if time left
-        if (me->exit - curTime < pizzaInfo[me->assignedPizza].t)
+        if (me->exit - curTime < pizzaInfo[me->assignedPizza - 1].t)
         {
             sem_post(&(ovensQueue));
             sem_post(me->callBackOrder->wakeUp);
@@ -136,17 +156,33 @@ void *chefFunc(void *arg)
         sem_post(&(ovensQueue));
 
         // set result of callback
-        me->callBackOrder->results[me->assignedPizza] = 1;
+        me->callBackOrder->results[me->assignedPizza - 1] = 1;
         sem_post(me->callBackOrder->wakeUp);
         me->assignedPizza = -1;
         me->callBackOrder = NULL;
     }
+
+    printf("Chef %d exits at time %d.\n", me->index, curTime);
+    return NULL;
 }
 
 void *ordersFunc(void *arg)
 {
     struct orders *me = (struct orders *)arg;
     int totalAcceptedPizzas = 0;
+    printf("Order %d placed by customer %d has pizzas {", me->owner->index, me->owner->index);
+    for (int i = 0; i < me->pizzas; i++)
+    {
+        printf("%d", me->pizzaIDs[i]);
+        if (i != me->pizzas - 1)
+        {
+            printf(", ");
+        }
+        else
+        {
+            printf("}.\nOrder %d placed by customer %d awaits processing.\n", me->owner->index, me->owner->index);
+        }
+    }
     // go through chefs that are available rn
     for (int pizzaIdx = 0; pizzaIdx < me->pizzas; pizzaIdx++)
     {
@@ -156,7 +192,7 @@ void *ordersFunc(void *arg)
         int enoughIngr = 1;
         for (int ingrIdx = 0; ingrIdx < limIngs; ingrIdx++)
         {
-            if (ingrAmt[ingrIdx] < pizzaInfo[me->pizzaIDs[pizzaIdx]].ingr[ingrIdx])
+            if (ingrAmt[ingrIdx] < pizzaInfo[me->pizzaIDs[pizzaIdx] - 1].ingr[ingrIdx])
             {
                 enoughIngr = 0;
                 break;
@@ -172,8 +208,9 @@ void *ordersFunc(void *arg)
         for (int i = 0; i < chefs; i++)
         {
             pthread_mutex_lock(chefInfo[i].mutex);
-            if (chefInfo[i].entry <= curTime && chefInfo[i].exit > curTime + pizzaInfo[me->pizzaIDs[pizzaIdx]].t && chefInfo[i].assignedPizza == -1)
+            if (chefInfo[i].entry <= curTime && chefInfo[i].exit > curTime + pizzaInfo[me->pizzaIDs[pizzaIdx] - 1].t && chefInfo[i].assignedPizza == -1)
             {
+                printf("Pizza %d in order %d assigned to chef %d.\n", me->pizzaIDs[pizzaIdx], me->owner->index, chefInfo[i].index);
                 assignedChef = 1;
                 totalAcceptedPizzas++;
 
@@ -194,7 +231,7 @@ void *ordersFunc(void *arg)
         sem_wait(me->wakeUp);
     }
 
-    sem_post(&(me->owner->wakeUp));
+    sem_post(me->owner->wakeUp);
 }
 
 void *customersFunc(void *arg)
@@ -223,8 +260,11 @@ void *customersFunc(void *arg)
 
     if (!anyPizza)
     {
-        return;
+        printf("Customer %d rejected.\nCustomer %d exits the drive-thru zone.\n", me->index + 1, me->index + 1);
+        return NULL;
     }
+
+    printf("Customer %d exits the drive-thru zone.\n", me->index + 1);
 }
 
 void *timerThread(void *arg)
@@ -245,6 +285,7 @@ void *timerThread(void *arg)
         {
             pthread_mutex_lock(&timeMutex);
             curTime++;
+            // printf("\n\n|%d|\n\n ", curTime);
             pthread_cond_broadcast(&timeCond);
             // printf("In timerThread: %d\n", curTime);
             pthread_mutex_unlock(&timeMutex);
@@ -293,10 +334,17 @@ int main()
         pizzaInfo[pizzaID - 1].t = pizzaTime;
         pizzaInfo[pizzaID - 1].specIngr = specIng;
 
-        pizzaInfo[pizzaID - 1].ingr = (int *)malloc(sizeof(int) * specIng);
+        pizzaInfo[pizzaID - 1].ingr = (int *)malloc(sizeof(int) * limIngs);
+        // set to 0
+        for (int j = 0; j < limIngs; j++)
+        {
+            pizzaInfo[pizzaID - 1].ingr[j] = 0;
+        }
         for (int j = 0; j < specIng; j++)
         {
-            scanf("%d", &pizzaInfo[pizzaID - 1].ingr[j]);
+            int ingrNo;
+            scanf("%d", &ingrNo);
+            pizzaInfo[pizzaID - 1].ingr[ingrNo - 1]++;
         }
     }
 
@@ -309,10 +357,13 @@ int main()
     {
         int entry, exit;
         scanf("%d %d", &entry, &exit);
+        chefInfo[i].index = i;
         chefInfo[i].entry = entry;
         chefInfo[i].exit = exit;
         chefInfo[i].assignedPizza = -1;
+        chefInfo[i].callBackOrder = NULL;
         chefInfo[i].mutex = (pthread_mutex_t *)malloc(sizeof(pthread_mutex_t));
+        chefInfo[i].wakeUp = (sem_t *)malloc(sizeof(sem_t));
         sem_init(chefInfo[i].wakeUp, 0, 0);
         pthread_mutex_init(chefInfo[i].mutex, NULL);
         pthread_create(&chefInfo[i].thread, NULL, chefFunc, &chefInfo[i]);
@@ -329,10 +380,11 @@ int main()
         customerInfo[i].order.pizzaIDs = (int *)malloc(sizeof(int) * pizzas);
         customerInfo[i].mutex = (pthread_mutex_t *)malloc(sizeof(pthread_mutex_t));
         customerInfo[i].wakeUp = (sem_t *)malloc(sizeof(sem_t));
+        customerInfo[i].order.wakeUp = (sem_t *)malloc(sizeof(sem_t));
 
         pthread_mutex_init(customerInfo[i].mutex, NULL);
         sem_init(customerInfo[i].wakeUp, 0, 0);
-        sem_init(&customerInfo[i].order.wakeUp, 0, 0);
+        sem_init(customerInfo[i].order.wakeUp, 0, 0);
         // setup results
         customerInfo[i].order.results = (int *)malloc(sizeof(int) * pizzas);
         for (int j = 0; j < pizzas; j++)
