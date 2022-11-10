@@ -9,15 +9,18 @@
 #include <netinet/in.h>
 #include <arpa/inet.h>
 #include <fcntl.h>
+#include <pthread.h>
+#include <semaphore.h>
 
 /////////////////////////////
 #include <iostream>
 #include <assert.h>
 #include <tuple>
+#include <vector>
 using namespace std;
 /////////////////////////////
 
-//Regular bold text
+// Regular bold text
 #define BBLK "\e[1;30m"
 #define BRED "\e[1;31m"
 #define BGRN "\e[1;32m"
@@ -34,7 +37,7 @@ typedef long long LL;
 #define part cout << "-----------------------------------" << endl;
 
 ///////////////////////////////
-#define MAX_CLIENTS 4
+#define MAX_CLIENTS 100
 #define PORT_ARG 8001
 
 const int initial_msg_len = 256;
@@ -75,7 +78,18 @@ int send_string_on_socket(int fd, const string &s)
 
 ///////////////////////////////
 
-void handle_connection(int client_socket_fd)
+struct adjNode
+{
+    int dest;
+    int delay;
+    adjNode(int d, int w)
+    {
+        dest = d;
+        delay = w;
+    }
+};
+
+void handle_client_connection(int client_socket_fd)
 {
     // int client_socket_fd = *((int *)client_socket_fd_ptr);
     //####################################################
@@ -124,9 +138,22 @@ close_client_socket_ceremony:
     printf(BRED "Disconnected from client" ANSI_RESET "\n");
     // return NULL;
 }
-
-int main(int argc, char *argv[])
+struct nodeView
 {
+    vector<vector<adjNode>> fullGraph;
+    pthread_mutex_t lock;
+};
+
+struct threadInfo
+{
+    int id;
+    vector<adjNode> *neighbours;
+    nodeView view;
+};
+
+void *threadListener(void *arg)
+{
+    struct threadInfo *info = (struct threadInfo *)arg;
 
     int i, j, k, t, n;
 
@@ -138,11 +165,204 @@ int main(int argc, char *argv[])
     /* create socket */
     /*
     The server program must have a special door—more precisely,
-    a special socket—that welcomes some initial contact 
+    a special socket—that welcomes some initial contact
     from a client process running on an arbitrary host
     */
-    //get welcoming socket
-    //get ip,port
+    // get welcoming socket
+    // get ip,port
+    /////////////////////////
+    wel_socket_fd = socket(AF_INET, SOCK_STREAM, 0);
+    if (wel_socket_fd < 0)
+    {
+        perror("ERROR creating welcoming socket");
+        exit(-1);
+    }
+
+    //////////////////////////////////////////////////////////////////////
+    /* IP address can be anything (INADDR_ANY) */
+    bzero((char *)&serv_addr_obj, sizeof(serv_addr_obj));
+    port_number = PORT_ARG + info->id + 1;
+    serv_addr_obj.sin_family = AF_INET;
+    // On the server side I understand that INADDR_ANY will bind the port to all available interfaces,
+    serv_addr_obj.sin_addr.s_addr = INADDR_ANY;
+    serv_addr_obj.sin_port = htons(port_number); // process specifies port
+
+    /////////////////////////////////////////////////////////////////////////////////////////////////////////
+    /* bind socket to this port number on this machine */
+    /*When a socket is created with socket(2), it exists in a name space
+       (address family) but has no address assigned to it.  bind() assigns
+       the address specified by addr to the socket referred to by the file
+       descriptor wel_sock_fd.  addrlen specifies the size, in bytes, of the
+       address structure pointed to by addr.  */
+
+    // CHECK WHY THE CASTING IS REQUIRED
+    if (bind(wel_socket_fd, (struct sockaddr *)&serv_addr_obj, sizeof(serv_addr_obj)) < 0)
+    {
+        perror("Error on bind on welcome socket: ");
+        exit(-1);
+    }
+    //////////////////////////////////////////////////////////////////////////////////////
+
+    /* listen for incoming connection requests */
+
+    listen(wel_socket_fd, MAX_CLIENTS);
+    cout << "Server " << info->id << " has started listening on the LISTEN PORT" << endl;
+    clilen = sizeof(client_addr_obj);
+
+    while (1)
+    {
+        /* accept a new request, create a client_socket_fd */
+        /*
+        During the three-way handshake, the client process knocks on the welcoming door
+        of the server process. When the server “hears” the knocking, it creates a new door—
+        more precisely, a new socket that is dedicated to that particular client.
+        */
+        // accept is a blocking call
+        printf("%d waiting for a new client to request for a connection\n", info->id);
+        client_socket_fd = accept(wel_socket_fd, (struct sockaddr *)&client_addr_obj, &clilen);
+        if (client_socket_fd < 0)
+        {
+            perror("ERROR while accept() system call occurred in SERVER");
+            exit(-1);
+        }
+
+        printf(BGRN "New client connected from port number %d and IP %s \n" ANSI_RESET, ntohs(client_addr_obj.sin_port), inet_ntoa(client_addr_obj.sin_addr));
+
+        handle_client_connection(client_socket_fd);
+    }
+}
+
+void *nodeThread(void *arg)
+{
+    threadInfo *me = (threadInfo *)arg;
+    pthread_mutex_init(&me->view.lock, NULL);
+
+    // add our own neighbours in fullgraph
+    pthread_mutex_lock(&me->view.lock);
+    // resize if size is less than me->id
+    if (me->view.fullGraph.size() <= me->id)
+    {
+        me->view.fullGraph.resize(me->id + 1);
+    }
+    me->view.fullGraph[me->id] = *me->neighbours;
+    pthread_mutex_unlock(&me->view.lock);
+
+    pthread_t listener;
+    pthread_create(&listener, NULL, threadListener, (void *)me);
+
+    int myId = me->id;
+    vector<adjNode> *neighbours = me->neighbours;
+
+    // connect to other threads and send our current view
+    for (int i = 0; i < neighbours->size(); i++)
+    {
+        int neighbourId = (*neighbours)[i].dest;
+        int neighbourPort = (*neighbours)[i].dest + PORT_ARG + 1;
+
+        int sock_fd = socket(AF_INET, SOCK_STREAM, 0);
+        if (sock_fd < 0)
+        {
+            perror("Error while creating socket");
+            exit(-1);
+        }
+
+        struct sockaddr_in serv_addr_obj;
+        bzero((char *)&serv_addr_obj, sizeof(serv_addr_obj));
+        serv_addr_obj.sin_family = AF_INET;
+        serv_addr_obj.sin_addr.s_addr = INADDR_ANY;
+        serv_addr_obj.sin_port = htons(neighbourPort);
+
+        if (connect(sock_fd, (struct sockaddr *)&serv_addr_obj, sizeof(serv_addr_obj)) < 0)
+        {
+            string error = "Error while connecting to neighbour " + to_string(neighbourId) + " from " + to_string(myId);
+            perror(error.c_str());
+            continue;
+        }
+
+        // send hi
+        pthread_mutex_lock(&me->view.lock);
+        string hi = "hi " + to_string(myId) + "\n";
+        int sent = send_string_on_socket(sock_fd, hi);
+        pthread_mutex_unlock(&me->view.lock);
+
+        if (sent < 0)
+        {
+            perror("Error while sending hi");
+            exit(-1);
+        }
+
+        sleep(1);
+
+        // send exit
+        string exitM = "exit\n";
+        sent = send_string_on_socket(sock_fd, exitM);
+        if (sent < 0)
+        {
+            perror("Error while sending exit");
+            exit(-1);
+        }
+    }
+
+    // wait for join
+    pthread_join(listener, NULL);
+
+    return NULL;
+}
+
+int main(int argc, char *argv[])
+{
+    int nodes, edges;
+
+    cin >> nodes >> edges;
+    vector<vector<adjNode>> adj_list(nodes);
+    // start end delay adjacency_list
+
+    for (int i = 0; i < edges; i++)
+    {
+        int start, end, delay;
+        cin >> start >> end >> delay;
+        adj_list[start].pb(adjNode(end, delay));
+        adj_list[end].pb(adjNode(start, delay));
+    }
+
+    // create thread for each node and give it its neighbours
+    pthread_t threads[nodes];
+    cout << "LMAO\n";
+    for (int i = 0; i < nodes; i++)
+    {
+        threadInfo *t = new threadInfo;
+        t->id = i;
+        t->neighbours = &adj_list[i];
+        int rc = pthread_create(&threads[i], NULL, nodeThread, (void *)t);
+
+        if (rc)
+        {
+            cout << "Error:unable to create thread," << rc << endl;
+            exit(-1);
+        }
+    }
+
+    for (int i = 0; i < nodes; i++)
+    {
+        pthread_join(threads[i], NULL);
+    }
+
+    return 0;
+    int i, j, k, t, n;
+
+    int wel_socket_fd, client_socket_fd, port_number;
+    socklen_t clilen;
+
+    struct sockaddr_in serv_addr_obj, client_addr_obj;
+    /////////////////////////////////////////////////////////////////////////
+    /* create socket */
+    /*
+    The server program must have a special door—more precisely,
+    a special socket—that welcomes some initial contact
+    from a client process running on an arbitrary host
+    */
+    // get welcoming socket
+    // get ip,port
     /////////////////////////
     wel_socket_fd = socket(AF_INET, SOCK_STREAM, 0);
     if (wel_socket_fd < 0)
@@ -158,7 +378,7 @@ int main(int argc, char *argv[])
     serv_addr_obj.sin_family = AF_INET;
     // On the server side I understand that INADDR_ANY will bind the port to all available interfaces,
     serv_addr_obj.sin_addr.s_addr = INADDR_ANY;
-    serv_addr_obj.sin_port = htons(port_number); //process specifies port
+    serv_addr_obj.sin_port = htons(port_number); // process specifies port
 
     /////////////////////////////////////////////////////////////////////////////////////////////////////////
     /* bind socket to this port number on this machine */
@@ -168,7 +388,7 @@ int main(int argc, char *argv[])
        descriptor wel_sock_fd.  addrlen specifies the size, in bytes, of the
        address structure pointed to by addr.  */
 
-    //CHECK WHY THE CASTING IS REQUIRED
+    // CHECK WHY THE CASTING IS REQUIRED
     if (bind(wel_socket_fd, (struct sockaddr *)&serv_addr_obj, sizeof(serv_addr_obj)) < 0)
     {
         perror("Error on bind on welcome socket: ");
@@ -187,10 +407,10 @@ int main(int argc, char *argv[])
         /* accept a new request, create a client_socket_fd */
         /*
         During the three-way handshake, the client process knocks on the welcoming door
-of the server process. When the server “hears” the knocking, it creates a new door—
-more precisely, a new socket that is dedicated to that particular client. 
+        of the server process. When the server “hears” the knocking, it creates a new door—
+        more precisely, a new socket that is dedicated to that particular client.
         */
-        //accept is a blocking call
+        // accept is a blocking call
         printf("Waiting for a new client to request for a connection\n");
         client_socket_fd = accept(wel_socket_fd, (struct sockaddr *)&client_addr_obj, &clilen);
         if (client_socket_fd < 0)
@@ -200,8 +420,14 @@ more precisely, a new socket that is dedicated to that particular client.
         }
 
         printf(BGRN "New client connected from port number %d and IP %s \n" ANSI_RESET, ntohs(client_addr_obj.sin_port), inet_ntoa(client_addr_obj.sin_addr));
-        
-        handle_connection(client_socket_fd);
+
+        handle_client_connection(client_socket_fd);
+    }
+
+    // wait for join
+    for (int i = 0; i < nodes; i++)
+    {
+        pthread_join(threads[i], NULL);
     }
 
     close(wel_socket_fd);

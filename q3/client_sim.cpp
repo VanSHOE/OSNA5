@@ -21,7 +21,7 @@
 using namespace std;
 /////////////////////////////
 
-//Regular bold text
+// Regular bold text
 #define BBLK "\e[1;30m"
 #define BRED "\e[1;31m"
 #define BGRN "\e[1;32m"
@@ -99,11 +99,11 @@ int get_socket_fd(struct sockaddr_in *ptr)
 
     memset(&server_obj, 0, sizeof(server_obj)); // Zero out structure
     server_obj.sin_family = AF_INET;
-    server_obj.sin_port = htons(port_num); //convert to big-endian order
+    server_obj.sin_port = htons(port_num); // convert to big-endian order
 
     // Converts an IP address in numbers-and-dots notation into either a
     // struct in_addr or a struct in6_addr depending on whether you specify AF_INET or AF_INET6.
-    //https://stackoverflow.com/a/20778887/6427607
+    // https://stackoverflow.com/a/20778887/6427607
 
     /////////////////////////////////////////////////////////////////////////////////////////
     /* connect to server */
@@ -114,9 +114,9 @@ int get_socket_fd(struct sockaddr_in *ptr)
         exit(-1);
     }
 
-    //part;
-    // printf(BGRN "Connected to server\n" ANSI_RESET);
     // part;
+    //  printf(BGRN "Connected to server\n" ANSI_RESET);
+    //  part;
     return socket_fd;
 }
 ////////////////////////////////////////////////////////
@@ -126,9 +126,8 @@ void begin_process()
     struct sockaddr_in server_obj;
     int socket_fd = get_socket_fd(&server_obj);
 
-
     cout << "Connection to server successful" << endl;
-    
+
     while (true)
     {
         string to_send;
