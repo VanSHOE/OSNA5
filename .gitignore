@@ -1,5 +1,4 @@
 *.out
-*/input.txt
 q3/server
 q3/client
 .vscode/*

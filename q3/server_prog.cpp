@@ -98,7 +98,62 @@ struct adjNode
     }
 };
 
-void handle_client_connection(int client_socket_fd, int myId = -1)
+struct nodeView
+{
+    vector<vector<adjNode>> fullGraph;
+    pthread_mutex_t lock;
+};
+
+string serializeGraph(vector<vector<adjNode>> &graph)
+{
+    string s = "";
+    for (int i = 0; i < graph.size(); i++)
+    {
+        for (int j = 0; j < graph[i].size(); j++)
+        {
+            s += to_string(graph[i][j].dest) + " " + to_string(graph[i][j].delay) + " ";
+        }
+        s += ";";
+    }
+    return s;
+}
+
+vector<vector<adjNode>> deserializeGraph(string &s)
+{
+    vector<vector<adjNode>> graph;
+    int i = 0;
+    while (i < s.length())
+    {
+        vector<adjNode> temp;
+        while (s[i] != ';')
+        {
+            int dest = 0, delay = 0;
+            while (s[i] != ' ')
+            {
+                dest = dest * 10 + (s[i] - '0');
+                i++;
+            }
+            i++;
+            while (s[i] != ' ' && s[i] != ';')
+            {
+                delay = delay * 10 + (s[i] - '0');
+                i++;
+            }
+            temp.pb(adjNode(dest, delay));
+        }
+        graph.pb(temp);
+        i++;
+    }
+    return graph;
+}
+
+struct threadInfo
+{
+    int id;
+    vector<adjNode> *neighbours;
+    nodeView view;
+};
+void handle_client_connection(int client_socket_fd, threadInfo *me = NULL)
 {
     // int client_socket_fd = *((int *)client_socket_fd_ptr);
     //####################################################
@@ -125,14 +180,15 @@ void handle_client_connection(int client_socket_fd, int myId = -1)
         pthread_mutex_lock(&print_lock);
 
         yellow();
-        cout << "Client sent to " << myId << ":| " << cmd << "|" << endl;
+        cout << "Client sent to " << std::to_string(me->id) << ": " << cmd << "" << endl;
         reset();
         pthread_mutex_unlock(&print_lock);
+
         // check if cmd starts from exit
         if (cmd.substr(0, 4) == "exit")
         {
             pthread_mutex_lock(&print_lock);
-            cout << "Exit pressed on " << myId << " with message: " << cmd << endl;
+            cout << "Exit pressed on " << me->id << " with message: " << cmd << endl;
             pthread_mutex_unlock(&print_lock);
             goto close_client_socket_ceremony;
         }
@@ -158,18 +214,6 @@ close_client_socket_ceremony:
     pthread_mutex_unlock(&print_lock);
     // return NULL;
 }
-struct nodeView
-{
-    vector<vector<adjNode>> fullGraph;
-    pthread_mutex_t lock;
-};
-
-struct threadInfo
-{
-    int id;
-    vector<adjNode> *neighbours;
-    nodeView view;
-};
 
 void *threadListener(void *arg)
 {
@@ -254,7 +298,7 @@ void *threadListener(void *arg)
         pthread_mutex_lock(&print_lock);
         printf(BGRN "New client connected from port number %d and IP %s \n" ANSI_RESET, ntohs(client_addr_obj.sin_port), inet_ntoa(client_addr_obj.sin_addr));
         pthread_mutex_unlock(&print_lock);
-        handle_client_connection(client_socket_fd, info->id);
+        handle_client_connection(client_socket_fd, info);
     }
 }
 
@@ -308,9 +352,10 @@ void *nodeThread(void *arg)
 
         // send hi
         pthread_mutex_lock(&me->view.lock);
-        string hi = "hi " + to_string(myId) + "\n";
-        int sent = send_string_on_socket(sock_fd, hi);
+        // string hi = "hi " + to_string(myId) + "\n";
+        string graph = serializeGraph(me->view.fullGraph);
         pthread_mutex_unlock(&me->view.lock);
+        int sent = send_string_on_socket(sock_fd, std::to_string(me->id) + "|" + graph);
 
         if (sent < 0)
         {
@@ -320,7 +365,7 @@ void *nodeThread(void *arg)
 
         read_string_from_socket(sock_fd, BUFSIZ);
 
-        sleep(4);
+        sleep(2);
 
         // send exit
         string exitM = "exit " + to_string(myId) + "\n";
