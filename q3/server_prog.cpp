@@ -152,6 +152,7 @@ vector<vector<adjNode>> deserializeGraph(string &s)
 struct threadInfo
 {
     int id;
+    bool dirty;
     vector<adjNode> *neighbours;
     nodeView view;
 };
@@ -506,6 +507,7 @@ int main(int argc, char *argv[])
         threadInfo *t = new threadInfo;
         t->id = i;
         t->neighbours = &adj_list[i];
+        t->dirty = true;
         int rc = pthread_create(&threads[i], NULL, nodeThread, (void *)t);
 
         if (rc)
