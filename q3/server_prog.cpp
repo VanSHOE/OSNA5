@@ -139,6 +139,8 @@ vector<vector<adjNode>> deserializeGraph(string &s)
                 delay = delay * 10 + (s[i] - '0');
                 i++;
             }
+            if (s[i] == ' ')
+                i++;
             temp.pb(adjNode(dest, delay));
         }
         graph.pb(temp);
@@ -177,12 +179,6 @@ void handle_client_connection(int client_socket_fd, threadInfo *me = NULL)
             pthread_mutex_unlock(&print_lock);
             goto close_client_socket_ceremony;
         }
-        pthread_mutex_lock(&print_lock);
-
-        yellow();
-        cout << "Client sent to " << std::to_string(me->id) << ": " << cmd << "" << endl;
-        reset();
-        pthread_mutex_unlock(&print_lock);
 
         // check if cmd starts from exit
         if (cmd.substr(0, 4) == "exit")
@@ -192,6 +188,100 @@ void handle_client_connection(int client_socket_fd, threadInfo *me = NULL)
             pthread_mutex_unlock(&print_lock);
             goto close_client_socket_ceremony;
         }
+        // deserialize command id|graph
+        int cmd_id = 0;
+        int i = 0;
+        while (cmd[i] != '|')
+        {
+            cmd_id = cmd_id * 10 + (cmd[i] - '0');
+            i++;
+        }
+
+        string graphS = cmd.substr(i + 1, cmd.length() - i - 1);
+
+        vector<vector<adjNode>> graph = deserializeGraph(graphS);
+        // print graph
+        pthread_mutex_lock(&print_lock);
+
+        yellow();
+        cout << "Client sent to " << std::to_string(me->id) << ": " << cmd << "" << endl;
+        reset();
+
+        blue();
+        cout << "Received graph from client " << me->id << " : " << endl;
+        for (int i = 0; i < graph.size(); i++)
+        {
+            cout << "Node " << i << " : ";
+            for (int j = 0; j < graph[i].size(); j++)
+            {
+                cout << "(" << graph[i][j].dest << " " << graph[i][j].delay << ") ";
+            }
+            cout << endl;
+        }
+        reset();
+
+        // check if graph has anything new, then add to our own view
+        // cout << "This happened\n";
+        pthread_mutex_lock(&me->view.lock);
+        // cout << "This happene2\n";
+        int neighId = cmd_id;
+        // check if it exists
+        if (me->view.fullGraph.size() <= neighId)
+        {
+            me->view.fullGraph.resize(neighId + 1);
+        }
+        // check if it has anything new
+        vector<vector<adjNode>> toAdd(graph.size());
+
+        for (int nId = 0; nId < neighId + 1; nId++)
+        {
+            cout << "This happened: " << neighId << endl;
+
+            for (int i = 0; i < graph[nId].size(); i++)
+            {
+                bool found = false;
+                for (int j = 0; j < me->view.fullGraph[nId].size(); j++)
+                {
+                    if (me->view.fullGraph[nId][j].dest == graph[nId][i].dest && me->view.fullGraph[nId][j].delay == graph[nId][i].delay)
+                    {
+                        found = true;
+                        break;
+                    }
+                }
+                if (!found)
+                {
+                    toAdd[nId].pb(graph[nId][i]);
+                }
+            }
+
+            for (int i = 0; i < toAdd.size(); i++)
+            {
+                for (int j = 0; j < toAdd[i].size(); j++)
+                {
+                    me->view.fullGraph[i].pb(toAdd[i][j]);
+                }
+            }
+        }
+
+        // add to our own view
+
+        // print all view
+        bold();
+        magenta();
+        cout << "View of " << me->id << " after receiving from " << neighId << " : " << endl;
+        for (int i = 0; i < me->view.fullGraph.size(); i++)
+        {
+            cout << "Node " << i << " : ";
+            for (int j = 0; j < me->view.fullGraph[i].size(); j++)
+            {
+                cout << "(" << me->view.fullGraph[i][j].dest << " " << me->view.fullGraph[i][j].delay << ") ";
+            }
+            cout << endl;
+        }
+        reset();
+        pthread_mutex_unlock(&me->view.lock);
+        pthread_mutex_unlock(&print_lock);
+
         string msg_to_send_back = "Ack: " + cmd;
 
         ////////////////////////////////////////
@@ -241,7 +331,12 @@ void *threadListener(void *arg)
         perror("ERROR creating welcoming socket");
         exit(-1);
     }
-
+    int opt = 1;
+    if (setsockopt(wel_socket_fd, SOL_SOCKET, SO_REUSEADDR | SO_REUSEPORT, &opt, sizeof(opt)))
+    {
+        perror("setsockopt");
+        exit(EXIT_FAILURE);
+    }
     //////////////////////////////////////////////////////////////////////
     /* IP address can be anything (INADDR_ANY) */
     bzero((char *)&serv_addr_obj, sizeof(serv_addr_obj));
@@ -353,9 +448,10 @@ void *nodeThread(void *arg)
         // send hi
         pthread_mutex_lock(&me->view.lock);
         // string hi = "hi " + to_string(myId) + "\n";
-        string graph = serializeGraph(me->view.fullGraph);
+        string graph2 = serializeGraph(me->view.fullGraph);
+        string graph = "This is a graph" + std::to_string(graph2.length());
         pthread_mutex_unlock(&me->view.lock);
-        int sent = send_string_on_socket(sock_fd, std::to_string(me->id) + "|" + graph);
+        int sent = send_string_on_socket(sock_fd, std::to_string(me->id) + "|" + graph2);
 
         if (sent < 0)
         {
@@ -447,6 +543,8 @@ int main(int argc, char *argv[])
     // get ip,port
     /////////////////////////
     wel_socket_fd = socket(AF_INET, SOCK_STREAM, 0);
+    // reuse addr and port
+
     if (wel_socket_fd < 0)
     {
         perror("ERROR creating welcoming socket");
