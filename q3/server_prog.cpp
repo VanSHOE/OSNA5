@@ -7,6 +7,7 @@
 #include <unistd.h>
 #include <string.h>
 #include <netinet/in.h>
+#include "../colors.h"
 #include <arpa/inet.h>
 #include <fcntl.h>
 #include <pthread.h>
@@ -33,14 +34,22 @@ using namespace std;
 typedef long long LL;
 
 #define pb push_back
-#define debug(x) cout << #x << " : " << x << endl
-#define part cout << "-----------------------------------" << endl;
+#define debug(x)                      \
+    pthread_mutex_lock(&print_lock);  \
+    cout << #x << " : " << x << endl; \
+    pthread_mutex_unlock(&print_lock);
+#define part                                               \
+    pthread_mutex_lock(&print_lock);                       \
+    cout << "-----------------------------------" << endl; \
+    pthread_mutex_unlock(&print_lock);
 
 ///////////////////////////////
 #define MAX_CLIENTS 100
 #define PORT_ARG 8001
 
 const int initial_msg_len = 256;
+
+pthread_mutex_t print_lock;
 
 ////////////////////////////////////
 
@@ -89,7 +98,7 @@ struct adjNode
     }
 };
 
-void handle_client_connection(int client_socket_fd)
+void handle_client_connection(int client_socket_fd, int myId = -1)
 {
     // int client_socket_fd = *((int *)client_socket_fd_ptr);
     //####################################################
@@ -105,17 +114,26 @@ void handle_client_connection(int client_socket_fd)
         tie(cmd, received_num) = read_string_from_socket(client_socket_fd, buff_sz);
         ret_val = received_num;
         // debug(ret_val);
-        // printf("Read something\n");
         if (ret_val <= 0)
         {
             // perror("Error read()");
+            pthread_mutex_lock(&print_lock);
             printf("Server could not read msg sent from client\n");
+            pthread_mutex_unlock(&print_lock);
             goto close_client_socket_ceremony;
         }
-        cout << "Client sent : " << cmd << endl;
-        if (cmd == "exit")
+        pthread_mutex_lock(&print_lock);
+
+        yellow();
+        cout << "Client sent to " << myId << ":| " << cmd << "|" << endl;
+        reset();
+        pthread_mutex_unlock(&print_lock);
+        // check if cmd starts from exit
+        if (cmd.substr(0, 4) == "exit")
         {
-            cout << "Exit pressed by client" << endl;
+            pthread_mutex_lock(&print_lock);
+            cout << "Exit pressed on " << myId << " with message: " << cmd << endl;
+            pthread_mutex_unlock(&print_lock);
             goto close_client_socket_ceremony;
         }
         string msg_to_send_back = "Ack: " + cmd;
@@ -135,7 +153,9 @@ void handle_client_connection(int client_socket_fd)
 
 close_client_socket_ceremony:
     close(client_socket_fd);
+    pthread_mutex_lock(&print_lock);
     printf(BRED "Disconnected from client" ANSI_RESET "\n");
+    pthread_mutex_unlock(&print_lock);
     // return NULL;
 }
 struct nodeView
@@ -206,7 +226,10 @@ void *threadListener(void *arg)
     /* listen for incoming connection requests */
 
     listen(wel_socket_fd, MAX_CLIENTS);
+
+    pthread_mutex_lock(&print_lock);
     cout << "Server " << info->id << " has started listening on the LISTEN PORT" << endl;
+    pthread_mutex_unlock(&print_lock);
     clilen = sizeof(client_addr_obj);
 
     while (1)
@@ -218,7 +241,9 @@ void *threadListener(void *arg)
         more precisely, a new socket that is dedicated to that particular client.
         */
         // accept is a blocking call
+        pthread_mutex_lock(&print_lock);
         printf("%d waiting for a new client to request for a connection\n", info->id);
+        pthread_mutex_unlock(&print_lock);
         client_socket_fd = accept(wel_socket_fd, (struct sockaddr *)&client_addr_obj, &clilen);
         if (client_socket_fd < 0)
         {
@@ -226,9 +251,10 @@ void *threadListener(void *arg)
             exit(-1);
         }
 
+        pthread_mutex_lock(&print_lock);
         printf(BGRN "New client connected from port number %d and IP %s \n" ANSI_RESET, ntohs(client_addr_obj.sin_port), inet_ntoa(client_addr_obj.sin_addr));
-
-        handle_client_connection(client_socket_fd);
+        pthread_mutex_unlock(&print_lock);
+        handle_client_connection(client_socket_fd, info->id);
     }
 }
 
@@ -249,6 +275,7 @@ void *nodeThread(void *arg)
 
     pthread_t listener;
     pthread_create(&listener, NULL, threadListener, (void *)me);
+    sleep(1);
 
     int myId = me->id;
     vector<adjNode> *neighbours = me->neighbours;
@@ -291,10 +318,12 @@ void *nodeThread(void *arg)
             exit(-1);
         }
 
-        sleep(1);
+        read_string_from_socket(sock_fd, BUFSIZ);
+
+        sleep(4);
 
         // send exit
-        string exitM = "exit\n";
+        string exitM = "exit " + to_string(myId) + "\n";
         sent = send_string_on_socket(sock_fd, exitM);
         if (sent < 0)
         {
@@ -305,6 +334,10 @@ void *nodeThread(void *arg)
 
     // wait for join
     pthread_join(listener, NULL);
+    // stopping
+    pthread_mutex_lock(&print_lock);
+    printf("Node %d is stopping\n", me->id);
+    pthread_mutex_unlock(&print_lock);
 
     return NULL;
 }
@@ -312,6 +345,7 @@ void *nodeThread(void *arg)
 int main(int argc, char *argv[])
 {
     int nodes, edges;
+    pthread_mutex_init(&print_lock, NULL);
 
     cin >> nodes >> edges;
     vector<vector<adjNode>> adj_list(nodes);
@@ -327,7 +361,7 @@ int main(int argc, char *argv[])
 
     // create thread for each node and give it its neighbours
     pthread_t threads[nodes];
-    cout << "LMAO\n";
+
     for (int i = 0; i < nodes; i++)
     {
         threadInfo *t = new threadInfo;
@@ -337,7 +371,10 @@ int main(int argc, char *argv[])
 
         if (rc)
         {
+            pthread_mutex_lock(&print_lock);
             cout << "Error:unable to create thread," << rc << endl;
+            pthread_mutex_unlock(&print_lock);
+            exit(-1);
             exit(-1);
         }
     }
@@ -399,7 +436,9 @@ int main(int argc, char *argv[])
     /* listen for incoming connection requests */
 
     listen(wel_socket_fd, MAX_CLIENTS);
+    pthread_mutex_lock(&print_lock);
     cout << "Server has started listening on the LISTEN PORT" << endl;
+    pthread_mutex_unlock(&print_lock);
     clilen = sizeof(client_addr_obj);
 
     while (1)
@@ -411,7 +450,9 @@ int main(int argc, char *argv[])
         more precisely, a new socket that is dedicated to that particular client.
         */
         // accept is a blocking call
+        pthread_mutex_lock(&print_lock);
         printf("Waiting for a new client to request for a connection\n");
+        pthread_mutex_unlock(&print_lock);
         client_socket_fd = accept(wel_socket_fd, (struct sockaddr *)&client_addr_obj, &clilen);
         if (client_socket_fd < 0)
         {
@@ -419,8 +460,9 @@ int main(int argc, char *argv[])
             exit(-1);
         }
 
+        pthread_mutex_lock(&print_lock);
         printf(BGRN "New client connected from port number %d and IP %s \n" ANSI_RESET, ntohs(client_addr_obj.sin_port), inet_ntoa(client_addr_obj.sin_addr));
-
+        pthread_mutex_unlock(&print_lock);
         handle_client_connection(client_socket_fd);
     }
 
