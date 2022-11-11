@@ -253,18 +253,16 @@ void handle_client_connection(int client_socket_fd, threadInfo *me = NULL)
                     toAdd[nId].pb(graph[nId][i]);
                 }
             }
-
-            for (int i = 0; i < toAdd.size(); i++)
-            {
-                for (int j = 0; j < toAdd[i].size(); j++)
-                {
-                    me->view.fullGraph[i].pb(toAdd[i][j]);
-                }
-            }
         }
 
         // add to our own view
-
+        for (int i = 0; i < toAdd.size(); i++)
+        {
+            for (int j = 0; j < toAdd[i].size(); j++)
+            {
+                me->view.fullGraph[i].pb(toAdd[i][j]);
+            }
+        }
         // print all view
         bold();
         magenta();
