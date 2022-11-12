@@ -48,6 +48,7 @@ typedef long long LL;
 ///////////////////////////////
 #define MAX_CLIENTS 100
 #define PORT_ARG 8001
+#define PORT_TRANSFER 10001
 
 const int initial_msg_len = 256;
 
@@ -166,8 +167,11 @@ struct threadInfo
     vector<adjNode> *neighbours;
     nodeView view;
     sem_t wakeUp;
+    sem_t wakeUpData;
     vector<vector<int>> routingTable;
     int tableStatus = 0;
+    queue<pair<int, int>> dataQueue;
+    sem_t sendData;
 };
 void handle_client_connection(int client_socket_fd, threadInfo *me = NULL)
 {
@@ -197,9 +201,9 @@ void handle_client_connection(int client_socket_fd, threadInfo *me = NULL)
         // check if cmd starts from exit
         if (cmd.substr(0, 4) == "exit")
         {
-            pthread_mutex_lock(&print_lock);
-            cout << "Exit pressed on " << me->id << " with message: " << cmd << endl;
-            pthread_mutex_unlock(&print_lock);
+            // pthread_mutex_lock(&print_lock);
+            // cout << "Exit pressed on " << me->id << " with message: " << cmd << endl;
+            // pthread_mutex_unlock(&print_lock);
             goto close_client_socket_ceremony;
         }
         // deserialize command id|graph
@@ -215,24 +219,24 @@ void handle_client_connection(int client_socket_fd, threadInfo *me = NULL)
 
         vector<vector<adjNode>> graph = deserializeGraph(graphS);
         // print graph
-        pthread_mutex_lock(&print_lock);
-        yellow();
-        cout << "Client sent to " << std::to_string(me->id) << ": " << cmd << "" << endl;
-        reset();
+        // pthread_mutex_lock(&print_lock);
+        // yellow();
+        // cout << "Client sent to " << std::to_string(me->id) << ": " << cmd << "" << endl;
+        // reset();
 
-        blue();
-        cout << me->id << " received graph from client " << cmd_id << " : " << endl;
-        for (int i = 0; i < graph.size(); i++)
-        {
-            cout << "Node " << i << " : ";
-            for (int j = 0; j < graph[i].size(); j++)
-            {
-                cout << "(" << graph[i][j].dest << " " << graph[i][j].delay << ") ";
-            }
-            cout << endl;
-        }
-        reset();
-        pthread_mutex_unlock(&print_lock);
+        // blue();
+        // cout << me->id << " received graph from client " << cmd_id << " : " << endl;
+        // for (int i = 0; i < graph.size(); i++)
+        // {
+        //     cout << "Node " << i << " : ";
+        //     for (int j = 0; j < graph[i].size(); j++)
+        //     {
+        //         cout << "(" << graph[i][j].dest << " " << graph[i][j].delay << ") ";
+        //     }
+        //     cout << endl;
+        // }
+        // reset();
+        // pthread_mutex_unlock(&print_lock);
 
         // check if graph has anything new, then add to our own view
         // cout << "This happened\n";
@@ -342,6 +346,7 @@ void handle_client_connection(int client_socket_fd, threadInfo *me = NULL)
         if (checkDone)
         {
             me->hasFullView = true;
+
             if (me->tableStatus == 0)
             {
                 me->tableStatus = 1;
@@ -393,8 +398,9 @@ void handle_client_connection(int client_socket_fd, threadInfo *me = NULL)
                 // print routing table
                 // get print lock
                 pthread_mutex_lock(&print_lock);
-                cout << "HERE\n";
+                // cout << "HERE\n";
 
+                green();
                 cout << "Routing table for " << me->id << " : " << endl;
                 for (int i = 0; i < me->routingTable.size(); i++)
                 {
@@ -410,6 +416,8 @@ void handle_client_connection(int client_socket_fd, threadInfo *me = NULL)
                 reset();
                 pthread_mutex_unlock(&print_lock);
             }
+
+            sem_post(&me->wakeUpData);
         }
 
         // print all view
@@ -421,7 +429,7 @@ void handle_client_connection(int client_socket_fd, threadInfo *me = NULL)
         if (somethingChanged)
         {
             pthread_mutex_lock(&print_lock);
-            cout << "\n\nView of " << me->id << " after receiving from " << neighId << " : " << endl;
+            cout << "\nView of " << me->id << " after receiving from " << neighId << " : " << endl;
 
             for (int i = 0; i < me->view.fullGraph.size(); i++)
             {
@@ -432,8 +440,7 @@ void handle_client_connection(int client_socket_fd, threadInfo *me = NULL)
                 }
                 cout << endl;
             }
-            cout << endl
-                 << endl;
+            cout << endl;
 
             pthread_mutex_unlock(&print_lock);
         }
@@ -546,7 +553,7 @@ void *threadListener(void *arg)
         */
         // accept is a blocking call
         pthread_mutex_lock(&print_lock);
-        printf("%d waiting for a new client to request for a connection\n", info->id);
+        // printf("%d waiting for a new client to request for a connection\n", info->id);
         pthread_mutex_unlock(&print_lock);
         client_socket_fd = accept(wel_socket_fd, (struct sockaddr *)&client_addr_obj, &clilen);
         if (client_socket_fd < 0)
@@ -559,6 +566,232 @@ void *threadListener(void *arg)
         // printf(BGRN "New client connected from port number %d and IP %s \n" ANSI_RESET, ntohs(client_addr_obj.sin_port), inet_ntoa(client_addr_obj.sin_addr));
         // pthread_mutex_unlock(&print_lock);
         handle_client_connection(client_socket_fd, info);
+    }
+}
+void handle_client_data_connection(int client_socket_fd, threadInfo *me = NULL)
+{
+    int received_num, sent_num;
+
+    /* read message from client */
+    int ret_val = 1;
+
+    while (true)
+    {
+        string cmd;
+        tie(cmd, received_num) = read_string_from_socket(client_socket_fd, buff_sz);
+        ret_val = received_num;
+        // debug(ret_val);
+        // printf("Read something\n");
+        if (ret_val <= 0)
+        {
+            // perror("Error read()");
+            printf("Server could not read msg sent from client\n");
+            goto close_client_socket_ceremony;
+        }
+        cout << "Data client sent : " << cmd << endl;
+        if (cmd == "exit")
+        {
+            cout << "Exit pressed by client" << endl;
+            goto close_client_socket_ceremony;
+        }
+
+        string msg_to_send_back = "Ack: " + cmd + "\n";
+
+        ////////////////////////////////////////
+        // "If the server write a message on the socket and then close it before the client's read. Will the client be able to read the message?"
+        // Yes. The client will get the data that was sent before the FIN packet that closes the socket.
+
+        // check if it starts with pt or send
+        // print routing table if pt
+        string s = "";
+        if (cmd == "pt")
+        {
+            // print routing table as dest forw delay
+            // cout << "dest forw delay" << endl;
+            // s = "dest forw delay\n";
+            vector<vector<string>> results;
+            for (int i = 0; i < me->routingTable.size(); i++)
+            {
+                if (i == me->id)
+                    continue;
+
+                int dest = i;
+                int forw = me->routingTable[i][1];
+                int delay = 0; // path cost
+
+                vector<int> path = me->routingTable[i];
+                for (int j = 1; j < path.size(); j++)
+                {
+                    int src = path[j - 1];
+                    int dest = path[j];
+                    for (int k = 0; k < me->view.fullGraph[src].size(); k++)
+                    {
+                        if (me->view.fullGraph[src][k].dest == dest)
+                        {
+                            delay += me->view.fullGraph[src][k].delay;
+                            break;
+                        }
+                    }
+                }
+
+                results.push_back({to_string(dest), to_string(forw), to_string(delay)});
+            }
+
+            // handle spacing
+            int max_dest = 5, max_forw = 5, max_delay = 6;
+            for (int i = 0; i < results.size(); i++)
+            {
+                max_dest = max(max_dest, (int)results[i][0].size());
+                max_forw = max(max_forw, (int)results[i][1].size());
+                max_delay = max(max_delay, (int)results[i][2].size());
+            }
+
+            // left align
+            for (int i = 0; i < 3; i++)
+            {
+                if (i == 0)
+                    s += "dest";
+                else if (i == 1)
+                    s += "forw";
+                else
+                    s += "delay";
+
+                if (i == 0)
+                    s += string(max_dest - 4, ' ');
+                else if (i == 1)
+                    s += string(max_forw - 4, ' ');
+                else
+                    s += string(max_delay - 5, ' ');
+            }
+
+            s += "\n";
+
+            for (int i = 0; i < results.size(); i++)
+            {
+                for (int j = 0; j < 3; j++)
+                {
+                    s += results[i][j];
+                    if (j == 0)
+                        s += string(max_dest - results[i][j].size(), ' ');
+                    else if (j == 1)
+                        s += string(max_forw - results[i][j].size(), ' ');
+                    else
+                        s += string(max_delay - results[i][j].size(), ' ');
+                }
+                s += "\n";
+            }
+        }
+        msg_to_send_back += s;
+        int sent_to_client = send_string_on_socket(client_socket_fd, msg_to_send_back);
+        // debug(sent_to_client);
+
+        if (sent_to_client == -1)
+        {
+            perror("Error while writing to client. Seems socket has been closed");
+            goto close_client_socket_ceremony;
+        }
+    }
+
+close_client_socket_ceremony:
+    close(client_socket_fd);
+    printf(BRED "Disconnected from client" ANSI_RESET "\n");
+    // return NULL;
+}
+
+void *nodeDataListener(void *arg)
+{
+    struct threadInfo *info = (struct threadInfo *)arg;
+
+    int i, j, k, t, n;
+
+    int wel_socket_fd, client_socket_fd, port_number;
+    socklen_t clilen;
+
+    struct sockaddr_in serv_addr_obj, client_addr_obj;
+    /////////////////////////////////////////////////////////////////////////
+    /* create socket */
+    /*
+    The server program must have a special door—more precisely,
+    a special socket—that welcomes some initial contact
+    from a client process running on an arbitrary host
+    */
+    // get welcoming socket
+    // get ip,port
+    /////////////////////////
+    wel_socket_fd = socket(AF_INET, SOCK_STREAM, 0);
+    if (wel_socket_fd < 0)
+    {
+        perror("ERROR creating welcoming socket");
+        exit(-1);
+    }
+    int opt = 1;
+    if (setsockopt(wel_socket_fd, SOL_SOCKET, SO_REUSEADDR | SO_REUSEPORT, &opt, sizeof(opt)))
+    {
+        perror("setsockopt");
+        exit(EXIT_FAILURE);
+    }
+    //////////////////////////////////////////////////////////////////////
+    /* IP address can be anything (INADDR_ANY) */
+    bzero((char *)&serv_addr_obj, sizeof(serv_addr_obj));
+    port_number = PORT_TRANSFER + info->id;
+    serv_addr_obj.sin_family = AF_INET;
+    // On the server side I understand that INADDR_ANY will bind the port to all available interfaces,
+    serv_addr_obj.sin_addr.s_addr = INADDR_ANY;
+    serv_addr_obj.sin_port = htons(port_number); // process specifies port
+
+    /////////////////////////////////////////////////////////////////////////////////////////////////////////
+    /* bind socket to this port number on this machine */
+    /*When a socket is created with socket(2), it exists in a name space
+       (address family) but has no address assigned to it.  bind() assigns
+       the address specified by addr to the socket referred to by the file
+       descriptor wel_sock_fd.  addrlen specifies the size, in bytes, of the
+       address structure pointed to by addr.  */
+
+    // CHECK WHY THE CASTING IS REQUIRED
+    if (bind(wel_socket_fd, (struct sockaddr *)&serv_addr_obj, sizeof(serv_addr_obj)) < 0)
+    {
+        perror("Error on bind on welcome socket: ");
+        exit(-1);
+    }
+    //////////////////////////////////////////////////////////////////////////////////////
+
+    /* listen for incoming connection requests */
+
+    listen(wel_socket_fd, MAX_CLIENTS);
+
+    pthread_mutex_lock(&print_lock);
+    cout << "Data Server " << info->id << " has started listening on the LISTEN PORT" << endl;
+    pthread_mutex_unlock(&print_lock);
+    clilen = sizeof(client_addr_obj);
+
+    while (1)
+    {
+        /* accept a new request, create a client_socket_fd */
+        /*
+        During the three-way handshake, the client process knocks on the welcoming door
+        of the server process. When the server “hears” the knocking, it creates a new door—
+        more precisely, a new socket that is dedicated to that particular client.
+        */
+        // accept is a blocking call
+        client_socket_fd = accept(wel_socket_fd, (struct sockaddr *)&client_addr_obj, &clilen);
+        if (client_socket_fd < 0)
+        {
+            perror("ERROR while accept() system call occurred in SERVER");
+            exit(-1);
+        }
+
+        handle_client_data_connection(client_socket_fd, info);
+    }
+}
+
+void *dataFwder(void *arg)
+{
+    threadInfo *info = (threadInfo *)arg;
+    sem_wait(&info->wakeUpData);
+
+    while (1)
+    {
+        sem_wait(&info->sendData);
     }
 }
 
@@ -577,8 +810,10 @@ void *nodeThread(void *arg)
     me->view.fullGraph[me->id] = *me->neighbours;
     pthread_mutex_unlock(&me->view.lock);
 
-    pthread_t listener;
+    pthread_t listener, dataListner, dataForwarder;
     pthread_create(&listener, NULL, threadListener, (void *)me);
+    pthread_create(&dataListner, NULL, nodeDataListener, (void *)me);
+    pthread_create(&dataForwarder, NULL, dataFwder, (void *)me);
     sleep(1);
 
     int myId = me->id;
@@ -652,6 +887,8 @@ void *nodeThread(void *arg)
     // kill listener
     // pthread_cancel(listener);
     pthread_join(listener, NULL);
+    pthread_join(dataListner, NULL);
+    pthread_join(dataForwarder, NULL);
     // stopping
     pthread_mutex_lock(&print_lock);
     printf("Node %d is stopping\n", me->id);
@@ -688,6 +925,8 @@ int main(int argc, char *argv[])
         t->dirty = true;
         t->hasFullView = false;
         sem_init(&t->wakeUp, 0, 0);
+        sem_init(&t->wakeUpData, 0, 0);
+        sem_init(&t->sendData, 0, 0);
         pthread_mutex_init(&t->dirtyLock, NULL);
         int rc = pthread_create(&threads[i], NULL, nodeThread, (void *)t);
 
@@ -706,96 +945,5 @@ int main(int argc, char *argv[])
         pthread_join(threads[i], NULL);
     }
 
-    return 0;
-    int i, j, k, t, n;
-
-    int wel_socket_fd, client_socket_fd, port_number;
-    socklen_t clilen;
-
-    struct sockaddr_in serv_addr_obj, client_addr_obj;
-    /////////////////////////////////////////////////////////////////////////
-    /* create socket */
-    /*
-    The server program must have a special door—more precisely,
-    a special socket—that welcomes some initial contact
-    from a client process running on an arbitrary host
-    */
-    // get welcoming socket
-    // get ip,port
-    /////////////////////////
-    wel_socket_fd = socket(AF_INET, SOCK_STREAM, 0);
-    // reuse addr and port
-
-    if (wel_socket_fd < 0)
-    {
-        perror("ERROR creating welcoming socket");
-        exit(-1);
-    }
-
-    //////////////////////////////////////////////////////////////////////
-    /* IP address can be anything (INADDR_ANY) */
-    bzero((char *)&serv_addr_obj, sizeof(serv_addr_obj));
-    port_number = PORT_ARG;
-    serv_addr_obj.sin_family = AF_INET;
-    // On the server side I understand that INADDR_ANY will bind the port to all available interfaces,
-    serv_addr_obj.sin_addr.s_addr = INADDR_ANY;
-    serv_addr_obj.sin_port = htons(port_number); // process specifies port
-
-    /////////////////////////////////////////////////////////////////////////////////////////////////////////
-    /* bind socket to this port number on this machine */
-    /*When a socket is created with socket(2), it exists in a name space
-       (address family) but has no address assigned to it.  bind() assigns
-       the address specified by addr to the socket referred to by the file
-       descriptor wel_sock_fd.  addrlen specifies the size, in bytes, of the
-       address structure pointed to by addr.  */
-
-    // CHECK WHY THE CASTING IS REQUIRED
-    if (bind(wel_socket_fd, (struct sockaddr *)&serv_addr_obj, sizeof(serv_addr_obj)) < 0)
-    {
-        perror("Error on bind on welcome socket: ");
-        exit(-1);
-    }
-    //////////////////////////////////////////////////////////////////////////////////////
-
-    /* listen for incoming connection requests */
-
-    listen(wel_socket_fd, MAX_CLIENTS);
-    pthread_mutex_lock(&print_lock);
-    cout << "Server has started listening on the LISTEN PORT" << endl;
-    pthread_mutex_unlock(&print_lock);
-    clilen = sizeof(client_addr_obj);
-
-    while (1)
-    {
-        /* accept a new request, create a client_socket_fd */
-        /*
-        During the three-way handshake, the client process knocks on the welcoming door
-        of the server process. When the server “hears” the knocking, it creates a new door—
-        more precisely, a new socket that is dedicated to that particular client.
-        */
-        // accept is a blocking call
-        pthread_mutex_lock(&print_lock);
-        printf("Waiting for a new client to request for a connection\n");
-        pthread_mutex_unlock(&print_lock);
-        client_socket_fd = accept(wel_socket_fd, (struct sockaddr *)&client_addr_obj, &clilen);
-        if (client_socket_fd < 0)
-        {
-            perror("ERROR while accept() system call occurred in SERVER");
-            exit(-1);
-        }
-
-        pthread_mutex_lock(&print_lock);
-        printf(BGRN "New client connected from port number %d and IP %s \n" ANSI_RESET, ntohs(client_addr_obj.sin_port), inet_ntoa(client_addr_obj.sin_addr));
-        pthread_mutex_unlock(&print_lock);
-        handle_client_connection(client_socket_fd);
-    }
-
-    // wait for join
-    for (int i = 0; i < nodes; i++)
-    {
-        pthread_join(threads[i], NULL);
-    }
-
-    close(wel_socket_fd);
     return 0;
 }
