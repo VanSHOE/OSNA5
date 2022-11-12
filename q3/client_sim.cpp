@@ -133,7 +133,23 @@ void begin_process()
         string to_send;
         cout << "Enter msg: ";
         getline(cin, to_send);
-        send_string_on_socket(socket_fd, to_send);
+        string realS = "";
+        int spaces = 0;
+        for (int i = 0; i < to_send.length(); i++)
+        {
+            realS += to_send[i];
+            if (to_send[i] == ' ')
+            {
+                spaces++;
+
+                if (spaces == 2 && to_send.substr(0, 4) == "send")
+                {
+                    realS += "-1 ";
+                }
+            }
+        }
+        cout << "Sending: " << realS << endl;
+        send_string_on_socket(socket_fd, realS);
         int num_bytes_read;
         string output_msg;
         tie(output_msg, num_bytes_read) = read_string_from_socket(socket_fd, buff_sz);

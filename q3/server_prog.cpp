@@ -681,6 +681,42 @@ void handle_client_data_connection(int client_socket_fd, threadInfo *me = NULL)
                 s += "\n";
             }
         }
+        else if (cmd.substr(0, 4) == "send")
+        {
+            // format is send index who msg
+            int index = stoi(cmd.substr(5, cmd.find(' ', 5) - 5));
+            int who = stoi(cmd.substr(cmd.find(' ', 5) + 1, cmd.find(' ', cmd.find(' ', 5) + 1) - cmd.find(' ', 5) - 1));
+            string message = cmd.substr(cmd.find(' ', cmd.find(' ', 5) + 1) + 1);
+
+            cout << "Index is " << index << endl;
+            cout << "Who is " << who << endl;
+            cout << "Message is " << message << endl;
+
+            // check if index is valid
+            if (index < 0 || index >= me->routingTable.size())
+            {
+                s = "Invalid index\n";
+            }
+            else
+            {
+                // check if index is reachable
+                if (me->routingTable[index][1] == -1)
+                {
+                    s = "Index is not reachable\n";
+                }
+                else
+                {
+                    // get print lock
+                    pthread_mutex_lock(&print_lock);
+                    green();
+                    printf("Data received at node: %d ; Source: %d; Destination: %d; Forwarded_Destination: %d; Message: %s\n", me->id, who, index, me->routingTable[index][1], message.c_str());
+                    reset();
+                    pthread_mutex_unlock(&print_lock);
+                    me->dataQueue.push({index, message});
+                    sem_post(&me->sendData);
+                }
+            }
+        }
         msg_to_send_back += s;
         int sent_to_client = send_string_on_socket(client_socket_fd, msg_to_send_back);
         // debug(sent_to_client);
@@ -691,7 +727,6 @@ void handle_client_data_connection(int client_socket_fd, threadInfo *me = NULL)
             goto close_client_socket_ceremony;
         }
     }
-
 close_client_socket_ceremony:
     close(client_socket_fd);
     printf(BRED "Disconnected from client" ANSI_RESET "\n");
@@ -792,6 +827,13 @@ void *dataFwder(void *arg)
     while (1)
     {
         sem_wait(&info->sendData);
+        auto toSend = info->dataQueue.front();
+        info->dataQueue.pop();
+
+        int dest = toSend[0];
+        int src = info->id;
+        int fwd = info->routingTable[dest][1];
+        string msg = toSend[1];
     }
 }
 
