@@ -195,7 +195,7 @@ void handle_client_connection(int client_socket_fd, threadInfo *me = NULL)
             pthread_mutex_lock(&print_lock);
             printf("Server could not read msg sent from client\n");
             pthread_mutex_unlock(&print_lock);
-            goto close_client_socket_ceremony;
+            goto close_client_socket_ceremony0;
         }
 
         // check if cmd starts from exit
@@ -204,7 +204,7 @@ void handle_client_connection(int client_socket_fd, threadInfo *me = NULL)
             // pthread_mutex_lock(&print_lock);
             // cout << "Exit pressed on " << me->id << " with message: " << cmd << endl;
             // pthread_mutex_unlock(&print_lock);
-            goto close_client_socket_ceremony;
+            goto close_client_socket_ceremony0;
         }
         // deserialize command id|graph
         int cmd_id = 0;
@@ -465,11 +465,11 @@ void handle_client_connection(int client_socket_fd, threadInfo *me = NULL)
         if (sent_to_client == -1)
         {
             perror("Error while writing to client. Seems socket has been closed");
-            goto close_client_socket_ceremony;
+            goto close_client_socket_ceremony0;
         }
     }
 
-close_client_socket_ceremony:
+close_client_socket_ceremony0:
     close(client_socket_fd);
     // pthread_mutex_lock(&print_lock);
     // printf(BRED "Disconnected from client" ANSI_RESET "\n");
@@ -586,13 +586,13 @@ void handle_client_data_connection(int client_socket_fd, threadInfo *me = NULL)
         {
             // perror("Error read()");
             printf("Server could not read msg sent from client\n");
-            goto close_client_socket_ceremony;
+            goto close_client_socket_ceremony1;
         }
         cout << "Data client sent : " << cmd << endl;
         if (cmd == "exit")
         {
             cout << "Exit pressed by client" << endl;
-            goto close_client_socket_ceremony;
+            goto close_client_socket_ceremony1;
         }
 
         string msg_to_send_back = "Ack: " + cmd + "\n";
@@ -724,16 +724,17 @@ void handle_client_data_connection(int client_socket_fd, threadInfo *me = NULL)
         msg_to_send_back += s;
         int sent_to_client = send_string_on_socket(client_socket_fd, msg_to_send_back);
         // debug(sent_to_client);
-
-        if (sent_to_client == -1)
+        sleep(1);
+        if (sent_to_client == -1 || me->id != 0)
         {
-            perror("Error while writing to client. Seems socket has been closed");
-            goto close_client_socket_ceremony;
+            if (sent_to_client == -1)
+                perror("Error while writing to client. Seems socket has been closed");
+            goto close_client_socket_ceremony1;
         }
     }
-close_client_socket_ceremony:
+close_client_socket_ceremony1:
     close(client_socket_fd);
-    printf(BRED "Disconnected from client" ANSI_RESET "\n");
+    printf(BRED "Disconnected from data client" ANSI_RESET "\n");
     // return NULL;
 }
 
