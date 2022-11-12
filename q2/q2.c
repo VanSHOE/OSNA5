@@ -314,7 +314,7 @@ int main()
     chefInfo = (struct chef *)malloc(sizeof(struct chef) * chefs);
     customerInfo = (struct customer *)malloc(sizeof(struct customer) * customers);
     ingrAmt = (int *)malloc(sizeof(int) * limIngs);
-    sem_init(&driveQueue, 0, time2ReachPickup);
+    sem_init(&driveQueue, 0, customers);
     sem_init(&ovensQueue, 0, ovens);
 
     curTime = -1;

@@ -18,6 +18,7 @@
 #include <assert.h>
 #include <tuple>
 #include <vector>
+#include <set>
 using namespace std;
 /////////////////////////////
 
@@ -61,12 +62,16 @@ pair<string, int> read_string_from_socket(const int &fd, int bytes)
     output.resize(bytes);
 
     int bytes_received = read(fd, &output[0], bytes - 1);
-    debug(bytes_received);
+    // get print lock
+    // pthread_mutex_lock(&print_lock);
+    // debug(bytes_received);
+
     if (bytes_received <= 0)
     {
         cerr << "Failed to read data from socket. \n";
     }
-
+    // release print lock
+    // pthread_mutex_unlock(&print_lock);
     output[bytes_received] = 0;
     output.resize(bytes_received);
     // debug(output);
@@ -152,9 +157,14 @@ vector<vector<adjNode>> deserializeGraph(string &s)
 struct threadInfo
 {
     int id;
+
     bool dirty;
+    pthread_mutex_t dirtyLock;
+
+    bool hasFullView;
     vector<adjNode> *neighbours;
     nodeView view;
+    sem_t wakeUp;
 };
 void handle_client_connection(int client_socket_fd, threadInfo *me = NULL)
 {
@@ -236,7 +246,7 @@ void handle_client_connection(int client_socket_fd, threadInfo *me = NULL)
 
         for (int nId = 0; nId < neighId + 1; nId++)
         {
-            cout << "This happened: " << neighId << endl;
+            // cout << "This happened: " << neighId << endl;
 
             for (int i = 0; i < graph[nId].size(); i++)
             {
@@ -257,27 +267,65 @@ void handle_client_connection(int client_socket_fd, threadInfo *me = NULL)
         }
 
         // add to our own view
+        bool somethingChanged = false;
         for (int i = 0; i < toAdd.size(); i++)
         {
             for (int j = 0; j < toAdd[i].size(); j++)
             {
                 me->view.fullGraph[i].pb(toAdd[i][j]);
+                // get dirty lock
+                pthread_mutex_lock(&me->dirtyLock);
+                me->dirty = true;
+                pthread_mutex_unlock(&me->dirtyLock);
+                sem_post(&me->wakeUp);
+                somethingChanged = true;
             }
         }
-        // print all view
-        bold();
-        magenta();
-        cout << "View of " << me->id << " after receiving from " << neighId << " : " << endl;
+
+        set<int> nodesSeenAsEdges;
         for (int i = 0; i < me->view.fullGraph.size(); i++)
         {
-            cout << "Node " << i << " : ";
             for (int j = 0; j < me->view.fullGraph[i].size(); j++)
             {
-                cout << "(" << me->view.fullGraph[i][j].dest << " " << me->view.fullGraph[i][j].delay << ") ";
+                nodesSeenAsEdges.insert(me->view.fullGraph[i][j].dest);
             }
-            cout << endl;
         }
-        reset();
+
+        bool checkDone = true;
+        for (auto node : nodesSeenAsEdges)
+        {
+            if (me->view.fullGraph.size() <= node || me->view.fullGraph[node].size() == 0)
+            {
+                checkDone = false;
+                break;
+            }
+        }
+
+        if (checkDone)
+        {
+            me->hasFullView = true;
+        }
+
+        // print all view
+        bold();
+        if (me->hasFullView)
+            green();
+        else
+            magenta();
+        cout << "View of " << me->id << " after receiving from " << neighId << " : " << endl;
+        if (somethingChanged)
+        {
+            for (int i = 0; i < me->view.fullGraph.size(); i++)
+            {
+                cout << "Node " << i << " : ";
+                for (int j = 0; j < me->view.fullGraph[i].size(); j++)
+                {
+                    cout << "(" << me->view.fullGraph[i][j].dest << " " << me->view.fullGraph[i][j].delay << ") ";
+                }
+                cout << endl;
+            }
+            reset();
+        }
         pthread_mutex_unlock(&me->view.lock);
         pthread_mutex_unlock(&print_lock);
 
@@ -419,60 +467,73 @@ void *nodeThread(void *arg)
     vector<adjNode> *neighbours = me->neighbours;
 
     // connect to other threads and send our current view
-    for (int i = 0; i < neighbours->size(); i++)
+    while (1)
     {
-        int neighbourId = (*neighbours)[i].dest;
-        int neighbourPort = (*neighbours)[i].dest + PORT_ARG + 1;
-
-        int sock_fd = socket(AF_INET, SOCK_STREAM, 0);
-        if (sock_fd < 0)
+        // get dirty lock
+        if (!me->dirty)
         {
-            perror("Error while creating socket");
-            exit(-1);
+
+            sem_wait(&me->wakeUp);
         }
-
-        struct sockaddr_in serv_addr_obj;
-        bzero((char *)&serv_addr_obj, sizeof(serv_addr_obj));
-        serv_addr_obj.sin_family = AF_INET;
-        serv_addr_obj.sin_addr.s_addr = INADDR_ANY;
-        serv_addr_obj.sin_port = htons(neighbourPort);
-
-        if (connect(sock_fd, (struct sockaddr *)&serv_addr_obj, sizeof(serv_addr_obj)) < 0)
+        for (int i = 0; i < neighbours->size(); i++)
         {
-            string error = "Error while connecting to neighbour " + to_string(neighbourId) + " from " + to_string(myId);
-            perror(error.c_str());
-            continue;
+            int neighbourId = (*neighbours)[i].dest;
+            int neighbourPort = (*neighbours)[i].dest + PORT_ARG + 1;
+
+            int sock_fd = socket(AF_INET, SOCK_STREAM, 0);
+            if (sock_fd < 0)
+            {
+                perror("Error while creating socket");
+                exit(-1);
+            }
+
+            struct sockaddr_in serv_addr_obj;
+            bzero((char *)&serv_addr_obj, sizeof(serv_addr_obj));
+            serv_addr_obj.sin_family = AF_INET;
+            serv_addr_obj.sin_addr.s_addr = INADDR_ANY;
+            serv_addr_obj.sin_port = htons(neighbourPort);
+
+            if (connect(sock_fd, (struct sockaddr *)&serv_addr_obj, sizeof(serv_addr_obj)) < 0)
+            {
+                string error = "Error while connecting to neighbour " + to_string(neighbourId) + " from " + to_string(myId);
+                perror(error.c_str());
+                continue;
+            }
+
+            // send hi
+            pthread_mutex_lock(&me->view.lock);
+            // string hi = "hi " + to_string(myId) + "\n";
+            string graph2 = serializeGraph(me->view.fullGraph);
+            string graph = "This is a graph" + std::to_string(graph2.length());
+            pthread_mutex_unlock(&me->view.lock);
+            int sent = send_string_on_socket(sock_fd, std::to_string(me->id) + "|" + graph2);
+
+            if (sent < 0)
+            {
+                perror("Error while sending hi");
+                exit(-1);
+            }
+
+            read_string_from_socket(sock_fd, BUFSIZ);
+
+            sleep(2);
+
+            // send exit
+            string exitM = "exit " + to_string(myId) + "\n";
+            sent = send_string_on_socket(sock_fd, exitM);
+            if (sent < 0)
+            {
+                perror("Error while sending exit");
+                exit(-1);
+            }
         }
-
-        // send hi
-        pthread_mutex_lock(&me->view.lock);
-        // string hi = "hi " + to_string(myId) + "\n";
-        string graph2 = serializeGraph(me->view.fullGraph);
-        string graph = "This is a graph" + std::to_string(graph2.length());
-        pthread_mutex_unlock(&me->view.lock);
-        int sent = send_string_on_socket(sock_fd, std::to_string(me->id) + "|" + graph2);
-
-        if (sent < 0)
-        {
-            perror("Error while sending hi");
-            exit(-1);
-        }
-
-        read_string_from_socket(sock_fd, BUFSIZ);
-
-        sleep(2);
-
-        // send exit
-        string exitM = "exit " + to_string(myId) + "\n";
-        sent = send_string_on_socket(sock_fd, exitM);
-        if (sent < 0)
-        {
-            perror("Error while sending exit");
-            exit(-1);
-        }
+        pthread_mutex_lock(&me->dirtyLock);
+        me->dirty = false;
+        pthread_mutex_unlock(&me->dirtyLock);
     }
 
-    // wait for join
+    // kill listener
+    // pthread_cancel(listener);
     pthread_join(listener, NULL);
     // stopping
     pthread_mutex_lock(&print_lock);
@@ -508,6 +569,9 @@ int main(int argc, char *argv[])
         t->id = i;
         t->neighbours = &adj_list[i];
         t->dirty = true;
+        t->hasFullView = false;
+        sem_init(&t->wakeUp, 0, 0);
+        pthread_mutex_init(&t->dirtyLock, NULL);
         int rc = pthread_create(&threads[i], NULL, nodeThread, (void *)t);
 
         if (rc)
