@@ -170,7 +170,7 @@ struct threadInfo
     sem_t wakeUpData;
     vector<vector<int>> routingTable;
     int tableStatus = 0;
-    queue<pair<int, int>> dataQueue;
+    queue<pair<int, string>> dataQueue;
     sem_t sendData;
 };
 void handle_client_connection(int client_socket_fd, threadInfo *me = NULL)
@@ -688,9 +688,9 @@ void handle_client_data_connection(int client_socket_fd, threadInfo *me = NULL)
             int who = stoi(cmd.substr(cmd.find(' ', 5) + 1, cmd.find(' ', cmd.find(' ', 5) + 1) - cmd.find(' ', 5) - 1));
             string message = cmd.substr(cmd.find(' ', cmd.find(' ', 5) + 1) + 1);
 
-            cout << "Index is " << index << endl;
-            cout << "Who is " << who << endl;
-            cout << "Message is " << message << endl;
+            // cout << "Index is " << index << endl;
+            // cout << "Who is " << who << endl;
+            // cout << "Message is " << message << endl;
 
             // check if index is valid
             if (index < 0 || index >= me->routingTable.size())
@@ -699,14 +699,10 @@ void handle_client_data_connection(int client_socket_fd, threadInfo *me = NULL)
             }
             else
             {
-                // check if index is reachable
-                if (me->routingTable[index][1] == -1)
+
+                // get print lock
+                if (me->id != index)
                 {
-                    s = "Index is not reachable\n";
-                }
-                else
-                {
-                    // get print lock
                     pthread_mutex_lock(&print_lock);
                     green();
                     printf("Data received at node: %d ; Source: %d; Destination: %d; Forwarded_Destination: %d; Message: %s\n", me->id, who, index, me->routingTable[index][1], message.c_str());
@@ -714,6 +710,14 @@ void handle_client_data_connection(int client_socket_fd, threadInfo *me = NULL)
                     pthread_mutex_unlock(&print_lock);
                     me->dataQueue.push({index, message});
                     sem_post(&me->sendData);
+                }
+                else
+                {
+                    pthread_mutex_lock(&print_lock);
+                    green();
+                    printf("Data received at node: %d ; Source: %d; Destination: %d; Message: %s\n", me->id, who, index, message.c_str());
+                    reset();
+                    pthread_mutex_unlock(&print_lock);
                 }
             }
         }
@@ -830,10 +834,45 @@ void *dataFwder(void *arg)
         auto toSend = info->dataQueue.front();
         info->dataQueue.pop();
 
-        int dest = toSend[0];
+        int dest = toSend.first;
         int src = info->id;
         int fwd = info->routingTable[dest][1];
-        string msg = toSend[1];
+        string msg = toSend.second;
+
+        int sock_fd = socket(AF_INET, SOCK_STREAM, 0);
+        if (sock_fd < 0)
+        {
+            perror("Error while creating socket");
+            exit(-1);
+        }
+
+        int neighbourPort = PORT_TRANSFER + fwd;
+        struct sockaddr_in serv_addr_obj;
+        bzero((char *)&serv_addr_obj, sizeof(serv_addr_obj));
+        serv_addr_obj.sin_family = AF_INET;
+        serv_addr_obj.sin_addr.s_addr = INADDR_ANY;
+        serv_addr_obj.sin_port = htons(neighbourPort);
+
+        if (connect(sock_fd, (struct sockaddr *)&serv_addr_obj, sizeof(serv_addr_obj)) < 0)
+        {
+            perror("Error while connecting to neighbour");
+            continue;
+        }
+
+        string toSendS = "send " + to_string(dest) + " " + to_string(src) + " " + msg;
+        int sent = send_string_on_socket(sock_fd, toSendS);
+        if (sent == -1)
+        {
+            perror("Error while sending data to neighbour");
+            continue;
+        }
+
+        string received = read_string_from_socket(sock_fd, BUFSIZ).first;
+        if (received == "-1")
+        {
+            perror("Error while receiving data from neighbour");
+            continue;
+        }
     }
 }
 
