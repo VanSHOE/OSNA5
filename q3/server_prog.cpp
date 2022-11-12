@@ -19,6 +19,7 @@
 #include <tuple>
 #include <vector>
 #include <set>
+#include <bits/stdc++.h>
 using namespace std;
 /////////////////////////////
 
@@ -165,6 +166,8 @@ struct threadInfo
     vector<adjNode> *neighbours;
     nodeView view;
     sem_t wakeUp;
+    vector<vector<int>> routingTable;
+    int tableStatus = 0;
 };
 void handle_client_connection(int client_socket_fd, threadInfo *me = NULL)
 {
@@ -213,13 +216,12 @@ void handle_client_connection(int client_socket_fd, threadInfo *me = NULL)
         vector<vector<adjNode>> graph = deserializeGraph(graphS);
         // print graph
         pthread_mutex_lock(&print_lock);
-
         yellow();
         cout << "Client sent to " << std::to_string(me->id) << ": " << cmd << "" << endl;
         reset();
 
         blue();
-        cout << "Received graph from client " << me->id << " : " << endl;
+        cout << me->id << " received graph from client " << cmd_id << " : " << endl;
         for (int i = 0; i < graph.size(); i++)
         {
             cout << "Node " << i << " : ";
@@ -230,12 +232,13 @@ void handle_client_connection(int client_socket_fd, threadInfo *me = NULL)
             cout << endl;
         }
         reset();
+        pthread_mutex_unlock(&print_lock);
 
         // check if graph has anything new, then add to our own view
         // cout << "This happened\n";
         pthread_mutex_lock(&me->view.lock);
         // cout << "This happene2\n";
-        int neighId = cmd_id;
+        int neighId = graph.size() - 1;
         // check if it exists
         if (me->view.fullGraph.size() <= neighId)
         {
@@ -277,9 +280,44 @@ void handle_client_connection(int client_socket_fd, threadInfo *me = NULL)
                 pthread_mutex_lock(&me->dirtyLock);
                 me->dirty = true;
                 pthread_mutex_unlock(&me->dirtyLock);
-                sem_post(&me->wakeUp);
+
                 somethingChanged = true;
             }
+        }
+
+        // check if both graphs are same
+        bool same = true;
+        for (int i = 0; i < graph.size(); i++)
+        {
+            if (graph[i].size() != me->view.fullGraph[i].size())
+            {
+                same = false;
+                break;
+            }
+            for (int j = 0; j < graph[i].size(); j++)
+            {
+                if (graph[i][j].dest != me->view.fullGraph[i][j].dest || graph[i][j].delay != me->view.fullGraph[i][j].delay)
+                {
+                    same = false;
+                    break;
+                }
+            }
+            if (!same)
+                break;
+        }
+
+        // if not same, mark dirty
+        if (!same)
+        {
+            // get dirty lock
+            pthread_mutex_lock(&me->dirtyLock);
+            me->dirty = true;
+            pthread_mutex_unlock(&me->dirtyLock);
+        }
+        if (somethingChanged || !same)
+        {
+            // wake up
+            sem_post(&me->wakeUp);
         }
 
         set<int> nodesSeenAsEdges;
@@ -304,6 +342,74 @@ void handle_client_connection(int client_socket_fd, threadInfo *me = NULL)
         if (checkDone)
         {
             me->hasFullView = true;
+            if (me->tableStatus == 0)
+            {
+                me->tableStatus = 1;
+
+                // run dijkstra, make routing table
+                priority_queue<pair<int, int>, vector<pair<int, int>>, greater<pair<int, int>>> pq;
+                vector<int> dist(me->view.fullGraph.size(), INT_MAX);
+                vector<int> prev(me->view.fullGraph.size(), -1);
+
+                pq.push({0, me->id});
+                dist[me->id] = 0;
+
+                while (!pq.empty())
+                {
+                    int u = pq.top().second;
+                    pq.pop();
+
+                    for (int i = 0; i < me->view.fullGraph[u].size(); i++)
+                    {
+                        int v = me->view.fullGraph[u][i].dest;
+                        int w = me->view.fullGraph[u][i].delay;
+
+                        if (dist[v] > dist[u] + w)
+                        {
+                            dist[v] = dist[u] + w;
+                            prev[v] = u;
+                            pq.push({dist[v], v});
+                        }
+                    }
+                }
+
+                // print all paths
+                me->routingTable.resize(me->view.fullGraph.size());
+                for (int i = 0; i < me->view.fullGraph.size(); i++)
+                {
+                    if (i == me->id)
+                        continue;
+                    vector<int> path;
+                    int cur = i;
+                    while (cur != -1)
+                    {
+                        path.pb(cur);
+                        cur = prev[cur];
+                    }
+                    reverse(path.begin(), path.end());
+                    me->routingTable[i] = path;
+                }
+
+                // print routing table
+                // get print lock
+                pthread_mutex_lock(&print_lock);
+                cout << "HERE\n";
+
+                cout << "Routing table for " << me->id << " : " << endl;
+                for (int i = 0; i < me->routingTable.size(); i++)
+                {
+                    if (i == me->id)
+                        continue;
+                    cout << "To " << i << " : ";
+                    for (int j = 0; j < me->routingTable[i].size(); j++)
+                    {
+                        cout << me->routingTable[i][j] << " ";
+                    }
+                    cout << endl;
+                }
+                reset();
+                pthread_mutex_unlock(&print_lock);
+            }
         }
 
         // print all view
@@ -312,9 +418,11 @@ void handle_client_connection(int client_socket_fd, threadInfo *me = NULL)
             green();
         else
             magenta();
-        cout << "View of " << me->id << " after receiving from " << neighId << " : " << endl;
         if (somethingChanged)
         {
+            pthread_mutex_lock(&print_lock);
+            cout << "\n\nView of " << me->id << " after receiving from " << neighId << " : " << endl;
+
             for (int i = 0; i < me->view.fullGraph.size(); i++)
             {
                 cout << "Node " << i << " : ";
@@ -324,11 +432,21 @@ void handle_client_connection(int client_socket_fd, threadInfo *me = NULL)
                 }
                 cout << endl;
             }
-            reset();
-        }
-        pthread_mutex_unlock(&me->view.lock);
-        pthread_mutex_unlock(&print_lock);
+            cout << endl
+                 << endl;
 
+            pthread_mutex_unlock(&print_lock);
+        }
+        // else
+        // {
+        //     pthread_mutex_lock(&print_lock);
+        //     cout << "I am " << me->id << " and I have received from " << neighId << " but nothing changed" << endl;
+        //     cout << "I have full view? : " << me->hasFullView << endl;
+        //     pthread_mutex_unlock(&print_lock);
+        // }
+
+        reset();
+        pthread_mutex_unlock(&me->view.lock);
         string msg_to_send_back = "Ack: " + cmd;
 
         ////////////////////////////////////////
@@ -346,9 +464,9 @@ void handle_client_connection(int client_socket_fd, threadInfo *me = NULL)
 
 close_client_socket_ceremony:
     close(client_socket_fd);
-    pthread_mutex_lock(&print_lock);
-    printf(BRED "Disconnected from client" ANSI_RESET "\n");
-    pthread_mutex_unlock(&print_lock);
+    // pthread_mutex_lock(&print_lock);
+    // printf(BRED "Disconnected from client" ANSI_RESET "\n");
+    // pthread_mutex_unlock(&print_lock);
     // return NULL;
 }
 
@@ -437,9 +555,9 @@ void *threadListener(void *arg)
             exit(-1);
         }
 
-        pthread_mutex_lock(&print_lock);
-        printf(BGRN "New client connected from port number %d and IP %s \n" ANSI_RESET, ntohs(client_addr_obj.sin_port), inet_ntoa(client_addr_obj.sin_addr));
-        pthread_mutex_unlock(&print_lock);
+        // pthread_mutex_lock(&print_lock);
+        // printf(BGRN "New client connected from port number %d and IP %s \n" ANSI_RESET, ntohs(client_addr_obj.sin_port), inet_ntoa(client_addr_obj.sin_addr));
+        // pthread_mutex_unlock(&print_lock);
         handle_client_connection(client_socket_fd, info);
     }
 }
@@ -470,9 +588,8 @@ void *nodeThread(void *arg)
     while (1)
     {
         // get dirty lock
-        if (!me->dirty)
+        if (!me->dirty && me->hasFullView)
         {
-
             sem_wait(&me->wakeUp);
         }
         for (int i = 0; i < neighbours->size(); i++)
