@@ -54,7 +54,9 @@ struct customer
     struct orders order;
     pthread_t thread;
     pthread_mutex_t *mutex;
+    int dirRejected;
     sem_t *wakeUp;
+    sem_t *leaveQ;
 };
 
 pthread_mutex_t pizzaLock;
@@ -80,7 +82,7 @@ void *chefFunc(void *arg)
 
     while (1)
     {
-        printf("Exit of Chef %d is %d and I should stay for %d\n", me->index, me->exit, me->exit - curTime);
+        // printf("Exit of Chef %d is %d and I should stay for %d\n", me->index, me->exit, me->exit - curTime);
         // get current time
         time_t start;
         struct timespec ts;
@@ -154,7 +156,9 @@ void *chefFunc(void *arg)
 
         sleep(pizzaInfo[me->assignedPizza].t - 3);
         sem_post(&(ovensQueue));
-
+        green();
+        printf("Chef %d has picked up the pizza %d for the order %d from the oven at time %d.\n", me->index, me->assignedPizza, me->callBackOrder->owner->index, curTime);
+        reset();
         // set result of callback
         me->callBackOrder->results[me->assignedPizza - 1] = 1;
         sem_post(me->callBackOrder->wakeUp);
@@ -226,9 +230,40 @@ void *ordersFunc(void *arg)
         }
     }
 
+    if (totalAcceptedPizzas == 0)
+    {
+        me->owner->dirRejected = 1;
+        sem_post(me->owner->wakeUp); // leave
+
+        return NULL;
+    }
+
+    sem_post(me->owner->wakeUp); // start going to queue
     for (int i = 0; i < totalAcceptedPizzas; i++)
     {
         sem_wait(me->wakeUp);
+    }
+
+    int anythingDone = 0;
+    for (int i = 0; i < me->pizzas; i++)
+    {
+        if (me->results[i])
+        {
+            anythingDone = 1;
+            break;
+        }
+    }
+
+    if (anythingDone)
+    {
+        printf("Order %d placed by customer %d is ready.\n", me->owner->index, me->owner->index);
+    }
+    else
+    {
+        printf("Order %d placed by customer %d is rejected.\n", me->owner->index, me->owner->index);
+        me->owner->dirRejected = 1;
+        sem_post(me->owner->leaveQ);
+        return NULL;
     }
 
     sem_post(me->owner->wakeUp);
@@ -243,27 +278,43 @@ void *customersFunc(void *arg)
     // wait for entry
     sem_wait(&driveQueue);
     // create order thread
+    int orderTime = curTime;
     pthread_create(&me->order.thread, NULL, ordersFunc, &me->order);
 
     sem_wait(me->wakeUp);
 
-    // check if any pizza was made
-    int anyPizza = 0;
-    for (int i = 0; i < me->order.pizzas; i++)
+    if (me->dirRejected)
     {
-        if (me->order.results[i] == 1)
-        {
-            anyPizza = 1;
-            break;
-        }
-    }
-
-    if (!anyPizza)
-    {
-        printf("Customer %d rejected.\nCustomer %d exits the drive-thru zone.\n", me->index + 1, me->index + 1);
+        printf("Customer %d leaves at time %d.\n", me->index + 1, curTime);
         return NULL;
     }
 
+    int time2sleep = time2ReachPickup - (curTime - orderTime);
+    time_t start;
+    struct timespec ts;
+    clock_gettime(CLOCK_REALTIME, &ts);
+    start = ts.tv_sec;
+
+    int shudILeave = sem_timedwait(me->leaveQ, &(struct timespec){.tv_sec = time2sleep + start, .tv_nsec = 0});
+
+    if (shudILeave == 0)
+    {
+        printf("Customer %d leaves at time %d.\n", me->index + 1, curTime);
+        return NULL;
+    }
+
+    printf("Customer %d is waiting at the pickup spot.\n", me->index + 1);
+    // TODO: fix if rejected here?
+
+    sem_wait(me->wakeUp);
+
+    for (int i = 0; i < me->order.pizzas; i++)
+    {
+        if (me->order.results[i])
+        {
+            printf("Customer %d picks up their pizza %d.\n", me->index + 1, me->order.pizzaIDs[i]);
+        }
+    }
     printf("Customer %d exits the drive-thru zone.\n", me->index + 1);
 }
 
@@ -276,6 +327,7 @@ void *timerThread(void *arg)
 
     pthread_mutex_lock(&timeMutex);
     curTime = 0;
+    pthread_cond_broadcast(&timeCond);
     pthread_mutex_unlock(&timeMutex);
 
     while (1)
@@ -380,10 +432,13 @@ int main()
         customerInfo[i].order.pizzaIDs = (int *)malloc(sizeof(int) * pizzas);
         customerInfo[i].mutex = (pthread_mutex_t *)malloc(sizeof(pthread_mutex_t));
         customerInfo[i].wakeUp = (sem_t *)malloc(sizeof(sem_t));
+        customerInfo[i].leaveQ = (sem_t *)malloc(sizeof(sem_t));
+        customerInfo[i].dirRejected = 0;
         customerInfo[i].order.wakeUp = (sem_t *)malloc(sizeof(sem_t));
 
         pthread_mutex_init(customerInfo[i].mutex, NULL);
         sem_init(customerInfo[i].wakeUp, 0, 0);
+        sem_init(customerInfo[i].leaveQ, 0, 0);
         sem_init(customerInfo[i].order.wakeUp, 0, 0);
         // setup results
         customerInfo[i].order.results = (int *)malloc(sizeof(int) * pizzas);
