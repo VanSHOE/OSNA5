@@ -78,7 +78,7 @@ void *chefFunc(void *arg)
     }
     pthread_mutex_unlock(&timeMutex);
 
-    printf("Chef %d arrives at time %d.\n", me->index, curTime);
+    printf("Chef %d arrives at time %d.\n", me->index + 1, curTime);
 
     while (1)
     {
@@ -95,7 +95,7 @@ void *chefFunc(void *arg)
             if (me->callBackOrder)
                 sem_post(me->callBackOrder->wakeUp);
 
-            printf("Chef %d exits at time here %d.\n", me->index, curTime);
+            printf("Chef %d exits at time here %d.\n", me->index + 1, curTime);
             return NULL;
         }
 
@@ -112,7 +112,6 @@ void *chefFunc(void *arg)
             }
         }
 
-        sleep(3);
         // use ingrs
         if (enoughIngr)
         {
@@ -131,6 +130,8 @@ void *chefFunc(void *arg)
         }
 
         pthread_mutex_unlock(&(ingrLock));
+
+        sleep(3);
         clock_gettime(CLOCK_REALTIME, &ts);
         start = ts.tv_sec;
 
@@ -139,7 +140,7 @@ void *chefFunc(void *arg)
         if (res == -1 && errno == ETIMEDOUT)
         {
             sem_post(me->callBackOrder->wakeUp);
-            printf("Chef %d exits at time %d.\n", me->index, curTime);
+            printf("Chef %d exits at time %d.\n", me->index + 1, curTime);
             return NULL;
         }
 
@@ -157,7 +158,7 @@ void *chefFunc(void *arg)
         sleep(pizzaInfo[me->assignedPizza].t - 3);
         sem_post(&(ovensQueue));
         green();
-        printf("Chef %d has picked up the pizza %d for the order %d from the oven at time %d.\n", me->index, me->assignedPizza, me->callBackOrder->owner->index, curTime);
+        printf("Chef %d has picked up the pizza %d for the order %d from the oven at time %d.\n", me->index + 1, me->assignedPizza, me->callBackOrder->owner->index + 1, curTime);
         reset();
         // set result of callback
         me->callBackOrder->results[me->assignedPizza - 1] = 1;
@@ -166,7 +167,7 @@ void *chefFunc(void *arg)
         me->callBackOrder = NULL;
     }
 
-    printf("Chef %d exits at time %d.\n", me->index, curTime);
+    printf("Chef %d exits at time %d.\n", me->index + 1, curTime);
     return NULL;
 }
 
@@ -174,7 +175,7 @@ void *ordersFunc(void *arg)
 {
     struct orders *me = (struct orders *)arg;
     int totalAcceptedPizzas = 0;
-    printf("Order %d placed by customer %d has pizzas {", me->owner->index, me->owner->index);
+    printf("Order %d placed by customer %d has pizzas {", me->owner->index + 1, me->owner->index + 1);
     for (int i = 0; i < me->pizzas; i++)
     {
         printf("%d", me->pizzaIDs[i]);
@@ -184,7 +185,7 @@ void *ordersFunc(void *arg)
         }
         else
         {
-            printf("}.\nOrder %d placed by customer %d awaits processing.\n", me->owner->index, me->owner->index);
+            printf("}.\nOrder %d placed by customer %d awaits processing.\n", me->owner->index + 1, me->owner->index + 1);
         }
     }
     // go through chefs that are available rn
@@ -214,7 +215,7 @@ void *ordersFunc(void *arg)
             pthread_mutex_lock(chefInfo[i].mutex);
             if (chefInfo[i].entry <= curTime && chefInfo[i].exit > curTime + pizzaInfo[me->pizzaIDs[pizzaIdx] - 1].t && chefInfo[i].assignedPizza == -1)
             {
-                printf("Pizza %d in order %d assigned to chef %d.\n", me->pizzaIDs[pizzaIdx], me->owner->index, chefInfo[i].index);
+                printf("Pizza %d in order %d assigned to chef %d.\n", me->pizzaIDs[pizzaIdx], me->owner->index + 1, chefInfo[i].index + 1);
                 assignedChef = 1;
                 totalAcceptedPizzas++;
 
@@ -223,6 +224,15 @@ void *ordersFunc(void *arg)
 
                 sem_post(chefInfo[i].wakeUp);
             }
+            else if (chefInfo[i].entry > curTime)
+            {
+                printf("Order %d waiting for a chef.\n", me->owner->index + 1);
+                pthread_mutex_unlock(chefInfo[i].mutex);
+                sleep(chefInfo[i--].entry - curTime);
+
+                continue;
+            }
+
             pthread_mutex_unlock(chefInfo[i].mutex);
 
             if (assignedChef)
@@ -256,11 +266,11 @@ void *ordersFunc(void *arg)
 
     if (anythingDone)
     {
-        printf("Order %d placed by customer %d is ready.\n", me->owner->index, me->owner->index);
+        printf("Order %d placed by customer %d is ready.\n", me->owner->index + 1, me->owner->index + 1);
     }
     else
     {
-        printf("Order %d placed by customer %d is rejected.\n", me->owner->index, me->owner->index);
+        printf("Order %d placed by customer %d is rejected.\n", me->owner->index + 1, me->owner->index + 1);
         me->owner->dirRejected = 1;
         sem_post(me->owner->leaveQ);
         return NULL;
@@ -357,7 +367,16 @@ int customerCompare(const void *a, const void *b)
 
     return val1;
 }
+int chefCompare(const void *a, const void *b)
+{
+    int val1 = (((struct chef *)a)->entry - ((struct chef *)b)->entry);
+    if (val1 == 0)
+    {
+        return (((struct chef *)a)->index - ((struct chef *)b)->index);
+    }
 
+    return val1;
+}
 int main()
 {
 
@@ -420,6 +439,8 @@ int main()
         pthread_mutex_init(chefInfo[i].mutex, NULL);
         pthread_create(&chefInfo[i].thread, NULL, chefFunc, &chefInfo[i]);
     }
+
+    qsort(chefInfo, chefs, sizeof(struct chef), chefCompare);
 
     for (int i = 0; i < customers; i++)
     {
