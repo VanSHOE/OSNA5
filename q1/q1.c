@@ -11,6 +11,7 @@ sem_t washingMachines;
 
 int couldntWash;
 pthread_mutex_t couldntWashtMutex;
+pthread_mutex_t printLock;
 
 int totalSecondsWasted;
 pthread_mutex_t totalSecondsWastedMutex;
@@ -43,7 +44,6 @@ void *studentIn(void *arg)
     // wait on condition variable
 
     // wait for entry
-    // printf("Student %d reporting for duty\n", studentInfo->index);
 
     sem_wait(studentInfo->wakeUp);
 
@@ -51,7 +51,9 @@ void *studentIn(void *arg)
     struct timespec ts;
     clock_gettime(CLOCK_REALTIME, &ts);
     start = ts.tv_sec;
-    printf("%d: Student %d arrives\n", curTime, studentInfo->index + 1);
+    pthread_mutex_lock(&printLock);
+    printf("%d: Student %d arrives to get their clothes washed\n", curTime, studentInfo->index + 1);
+    pthread_mutex_unlock(&printLock);
 
     pthread_mutex_lock(&timeMutex);
     int cameAt = curTime;
@@ -60,7 +62,6 @@ void *studentIn(void *arg)
     // wait for washing machine
     // get clockrealtime time
 
-    // printf("Start time: %ld\n", start);
     struct timespec endTime;
     endTime.tv_sec = start + studentInfo->P + 1;
     endTime.tv_nsec = 0;
@@ -70,7 +71,9 @@ void *studentIn(void *arg)
     if ((result == -1 && errno == ETIMEDOUT) || curTime > studentInfo->P + cameAt)
     {
         red();
+        pthread_mutex_lock(&printLock);
         printf("%d: Student %d leaves without washing\n", curTime - 1, studentInfo->index + 1);
+        pthread_mutex_unlock(&printLock);
         reset();
         pthread_mutex_lock(&couldntWashtMutex);
         couldntWash++;
@@ -89,7 +92,9 @@ void *studentIn(void *arg)
     pthread_mutex_unlock(&totalSecondsWastedMutex);
 
     green();
+    pthread_mutex_lock(&printLock);
     printf("%d: Student %d starts washing.\n", curTime, studentInfo->index + 1);
+    pthread_mutex_unlock(&printLock);
     reset();
     // sleep(studentInfo->W);
     int timePassed = 0;
@@ -104,7 +109,9 @@ void *studentIn(void *arg)
 
     // release washing machine
     yellow();
+    pthread_mutex_lock(&printLock);
     printf("%d: Student %d leaves after washing\n", curTime, studentInfo->index + 1);
+    pthread_mutex_unlock(&printLock);
     reset();
 
     sem_post(&washingMachines);
@@ -140,7 +147,7 @@ void *timerThread(void *arg)
             pthread_mutex_lock(&timeMutex);
             curTime++;
             pthread_cond_broadcast(&timeCond);
-            // printf("In timerThread: %d\n", curTime);
+
             pthread_mutex_unlock(&timeMutex);
             start = ts.tv_sec;
         }
@@ -157,6 +164,7 @@ int main()
     pthread_mutex_init(&couldntWashtMutex, NULL);
     pthread_mutex_init(&totalSecondsWastedMutex, NULL);
     pthread_mutex_init(&timeMutex, NULL);
+    pthread_mutex_init(&printLock, NULL);
 
     // initQueue(waiting);
 
@@ -167,7 +175,9 @@ int main()
     // error check
     if (students == NULL)
     {
+        pthread_mutex_lock(&printLock);
         printf("Error allocating memory\n");
+        pthread_mutex_unlock(&printLock);
         exit(1);
     }
 
@@ -180,7 +190,9 @@ int main()
         students[i].wakeUp = (sem_t *)malloc(sizeof(sem_t));
         if (students[i].mutex == NULL)
         {
+            pthread_mutex_lock(&printLock);
             printf("Error allocating memory\n");
+            pthread_mutex_unlock(&printLock);
             exit(1);
         }
 
@@ -190,7 +202,6 @@ int main()
         students[i].invalid = 0;
     }
 
-    // printf("Inputting done\n");
     // sort the students array on T
     qsort(students, n, sizeof(struct student), cmpfunc);
 
@@ -237,15 +248,21 @@ int main()
         pthread_mutex_destroy(students[i].mutex);
     }
 
+    pthread_mutex_lock(&printLock);
     printf("%d\n%d\n", couldntWash, totalSecondsWasted);
+    pthread_mutex_unlock(&printLock);
 
     if (4 * couldntWash >= n)
     {
+        pthread_mutex_lock(&printLock);
         printf("Yes\n");
+        pthread_mutex_unlock(&printLock);
     }
     else
     {
+        pthread_mutex_lock(&printLock);
         printf("No\n");
+        pthread_mutex_unlock(&printLock);
     }
 
     return 0;
