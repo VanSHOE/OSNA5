@@ -75,12 +75,15 @@ void *chefFunc(void *arg) // blue
     struct chef *me = (struct chef *)arg;
 
     pthread_mutex_lock(&timeMutex);
+
     while (curTime < me->entry)
     {
         pthread_cond_wait(&timeCond, &timeMutex);
     }
     pthread_mutex_lock(&printLock);
+    blue();
     printf("Chef %d arrives at time %d.\n", me->index + 1, curTime);
+    reset();
     pthread_mutex_unlock(&printLock);
     me->ready = 1;
 
@@ -102,7 +105,9 @@ void *chefFunc(void *arg) // blue
                 sem_post(me->callBackOrder->wakeUp);
 
             pthread_mutex_lock(&printLock);
+            blue();
             printf("Chef %d exits at time here %d.\n", me->index + 1, curTime);
+            reset();
             pthread_mutex_unlock(&printLock);
             return NULL;
         }
@@ -149,7 +154,9 @@ void *chefFunc(void *arg) // blue
         {
             sem_post(me->callBackOrder->wakeUp);
             pthread_mutex_lock(&printLock);
+            blue();
             printf("Chef %d exits at time %d.\n", me->index + 1, curTime);
+            reset();
             pthread_mutex_unlock(&printLock);
             return NULL;
         }
@@ -171,7 +178,9 @@ void *chefFunc(void *arg) // blue
 
         green();
         pthread_mutex_lock(&printLock);
+        blue();
         printf("Chef %d has picked up the pizza %d for the order %d from the oven at time %d.\n", me->index + 1, me->assignedPizza, me->callBackOrder->owner->index + 1, curTime);
+        reset();
         pthread_mutex_unlock(&printLock);
         reset();
         // set result of callback
@@ -182,7 +191,9 @@ void *chefFunc(void *arg) // blue
     }
 
     pthread_mutex_lock(&printLock);
+    blue();
     printf("Chef %d exits at time %d.\n", me->index + 1, curTime);
+    reset();
     pthread_mutex_unlock(&printLock);
     return NULL;
 }
@@ -192,23 +203,31 @@ void *ordersFunc(void *arg) // red
     struct orders *me = (struct orders *)arg;
     int totalAcceptedPizzas = 0;
     pthread_mutex_lock(&printLock);
+    red();
     printf("Order %d placed by customer %d has pizzas {", me->owner->index + 1, me->owner->index + 1);
+    reset();
     pthread_mutex_unlock(&printLock);
     for (int i = 0; i < me->pizzas; i++)
     {
         pthread_mutex_lock(&printLock);
+        red();
         printf("%d", me->pizzaIDs[i]);
+        reset();
         pthread_mutex_unlock(&printLock);
         if (i != me->pizzas - 1)
         {
             pthread_mutex_lock(&printLock);
+            red();
             printf(", ");
+            reset();
             pthread_mutex_unlock(&printLock);
         }
         else
         {
             pthread_mutex_lock(&printLock);
+            red();
             printf("}.\nOrder %d placed by customer %d awaits processing.\n", me->owner->index + 1, me->owner->index + 1);
+            reset();
             pthread_mutex_unlock(&printLock);
         }
     }
@@ -240,7 +259,9 @@ void *ordersFunc(void *arg) // red
             if (chefInfo[i].entry <= curTime && chefInfo[i].exit > curTime + pizzaInfo[me->pizzaIDs[pizzaIdx] - 1].t && chefInfo[i].assignedPizza == -1 && chefInfo[i].ready)
             {
                 pthread_mutex_lock(&printLock);
+                red();
                 printf("Pizza %d in order %d assigned to chef %d.\n", me->pizzaIDs[pizzaIdx], me->owner->index + 1, chefInfo[i].index + 1);
+                reset();
                 pthread_mutex_unlock(&printLock);
                 assignedChef = 1;
                 totalAcceptedPizzas++;
@@ -286,9 +307,6 @@ void *ordersFunc(void *arg) // red
     int anythingDone = 0;
     for (int i = 0; i < me->pizzas; i++)
     {
-        pthread_mutex_lock(&printLock);
-        printf("%d ", me->results[i]);
-        pthread_mutex_unlock(&printLock);
         if (me->results[i])
         {
             anythingDone = 1;
@@ -299,16 +317,17 @@ void *ordersFunc(void *arg) // red
     if (anythingDone)
     {
         pthread_mutex_lock(&printLock);
+        red();
         printf("Order %d placed by customer %d is ready.\n", me->owner->index + 1, me->owner->index + 1);
+        reset();
         pthread_mutex_unlock(&printLock);
     }
     else
     {
         pthread_mutex_lock(&printLock);
-        printf("sad\n");
-        pthread_mutex_unlock(&printLock);
-        pthread_mutex_lock(&printLock);
+        red();
         printf("Order %d placed by customer %d is rejected.\n", me->owner->index + 1, me->owner->index + 1);
+        reset();
         pthread_mutex_unlock(&printLock);
         me->owner->dirRejected = 1;
         sem_post(me->owner->leaveQ);
@@ -323,7 +342,9 @@ void *customersFunc(void *arg) // yellow
     struct customer *me = (struct customer *)arg;
     sem_wait(me->wakeUp);
     pthread_mutex_lock(&printLock);
+    yellow();
     printf("Customer %d arrives at time %d.: %d\n", me->index + 1, curTime, me->entry);
+    reset();
     pthread_mutex_unlock(&printLock);
     // wait for entry
     sem_wait(&driveQueue);
@@ -336,7 +357,9 @@ void *customersFunc(void *arg) // yellow
     if (me->dirRejected)
     {
         pthread_mutex_lock(&printLock);
+        yellow();
         printf("Customer %d leaves at time %d.\n", me->index + 1, curTime);
+        reset();
         pthread_mutex_unlock(&printLock);
         return NULL;
     }
@@ -352,13 +375,17 @@ void *customersFunc(void *arg) // yellow
     if (shudILeave == 0)
     {
         pthread_mutex_lock(&printLock);
+        yellow();
         printf("Customer %d leaves at time %d.\n", me->index + 1, curTime);
+        reset();
         pthread_mutex_unlock(&printLock);
         return NULL;
     }
 
     pthread_mutex_lock(&printLock);
+    yellow();
     printf("Customer %d is waiting at the pickup spot.\n", me->index + 1);
+    reset();
     pthread_mutex_unlock(&printLock); // TODO: fix if rejected here?
 
     sem_wait(me->wakeUp);
@@ -368,12 +395,16 @@ void *customersFunc(void *arg) // yellow
         if (me->order.results[i])
         {
             pthread_mutex_lock(&printLock);
+            yellow();
             printf("Customer %d picks up their pizza %d.\n", me->index + 1, me->order.pizzaIDs[i]);
+            reset();
             pthread_mutex_unlock(&printLock);
         }
     }
     pthread_mutex_lock(&printLock);
+    yellow();
     printf("Customer %d exits the drive-thru zone.\n", me->index + 1);
+    reset();
     pthread_mutex_unlock(&printLock);
 }
 
@@ -549,7 +580,7 @@ int main()
         if (customerInfo[i].entry <= curTime)
         {
             pthread_mutex_lock(&printLock);
-            printf("Waking up customer %d\n", customerInfo[i].index + 1);
+
             pthread_mutex_unlock(&printLock);
             sem_post(customerInfo[i].wakeUp);
             pthread_mutex_unlock(customerInfo[i++].mutex);
