@@ -5,6 +5,8 @@
   - [timeMutex](#timemutex)
 - [Global Condition Variables](#global-condition-variables)
   - [timeCond](#timecond)
+- [Global Semaphores](#global-semaphores)
+  - [washingMachines](#washingmachines)
 - [Extra Functions](#extra-functions)
   - [studentIn](#studentin)
   - [cmpfunc](#cmpfunc)
@@ -35,6 +37,12 @@ Ensures that the curTime variable that stores time for all threads is not being 
 ## timeCond
 
 Broadcasted on every tick
+
+# Global Semaphores
+
+## washingMachines
+
+Used to ensure that only x washing machines can be in use at a time.
 
 # Extra Functions
 
