@@ -8,7 +8,9 @@
 - [Extra Functions](#extra-functions)
   - [studentIn](#studentin)
   - [cmpfunc](#cmpfunc)
+  - [timerThread](#timerthread)
 - [Algorithm](#algorithm)
+- [Extra Info](#extra-info)
 
 # Compile command
 
@@ -45,6 +47,10 @@ On failure it updates the global variables `couldntWash` and `totalSecondsWasted
 
 Used to compare two student objects. It is used in qsort in `main`. It places those students on the left who must come first by FCFS.
 
+## timerThread
+
+This function is what the timer thread runs. It is responsible for updating the global variable `curTime` and broadcasting on `timeCond` every second. It ensures that there is only one global view of time.
+
 # Algorithm
 
 The algorithm is pretty straight forward.
@@ -61,3 +67,8 @@ Main function starts off with init-ing all the mutex and condition variables and
 The students are then sorted on based of their arrival time (if equal on their indices)
 Then it creates all their threads passing them their information.
 Then it keeps iterating over the list and waking up any student thread that needs to run.
+
+# Extra Info
+
+Bonus was completed, time is printed.
+Same coloring scheme as required.
