@@ -106,7 +106,7 @@ void *chefFunc(void *arg) // blue
 
             pthread_mutex_lock(&printLock);
             blue();
-            printf("Chef %d exits at time here %d.\n", me->index + 1, curTime);
+            printf("Chef %d exits at time %d.\n", me->index + 1, curTime);
             reset();
             pthread_mutex_unlock(&printLock);
             return NULL;
@@ -128,6 +128,11 @@ void *chefFunc(void *arg) // blue
         // use ingrs
         if (enoughIngr)
         {
+            pthread_mutex_lock(&printLock);
+            blue();
+            printf("Chef %d is preparing the pizza %d for order %d.\n", me->index + 1, me->assignedPizza, me->callBackOrder->owner->index + 1);
+            reset();
+            pthread_mutex_unlock(&printLock);
             for (int ingrIdx = 0; ingrIdx < limIngs; ingrIdx++)
             {
                 ingrAmt[ingrIdx] -= pizzaInfo[me->assignedPizza - 1].ingr[ingrIdx];
@@ -136,6 +141,11 @@ void *chefFunc(void *arg) // blue
         else
         {
             pthread_mutex_unlock(&(ingrLock));
+            pthread_mutex_lock(&printLock);
+            blue();
+            printf("Chef %d could not complete pizza %d for order %d due to ingredient shortage.\n", me->index + 1, me->assignedPizza, me->callBackOrder->owner->index + 1);
+            reset();
+            pthread_mutex_unlock(&printLock);
             sem_post(me->callBackOrder->wakeUp);
             me->assignedPizza = -1;
             me->callBackOrder = NULL;
@@ -147,7 +157,11 @@ void *chefFunc(void *arg) // blue
         sleep(3);
         clock_gettime(CLOCK_REALTIME, &ts);
         start = ts.tv_sec;
-
+        pthread_mutex_lock(&printLock);
+        blue();
+        printf("Chef %d is waiting for oven allocation for pizza %d for order %d.\n", me->index + 1, me->assignedPizza, me->callBackOrder->owner->index + 1);
+        reset();
+        pthread_mutex_unlock(&printLock);
         res = sem_timedwait(&(ovensQueue), &(struct timespec){.tv_sec = me->exit - curTime + start, .tv_nsec = 0});
         // terminate if time is up
         if (res == -1 && errno == ETIMEDOUT)
@@ -172,17 +186,21 @@ void *chefFunc(void *arg) // blue
             continue;
         }
 
+        pthread_mutex_lock(&printLock);
+        blue();
+        printf("Chef %d has put the pizza %d for order %d in the oven at time %d.\n", me->index + 1, me->assignedPizza, me->callBackOrder->owner->index + 1, curTime);
+        reset();
+        pthread_mutex_unlock(&printLock);
         sleep(pizzaInfo[me->assignedPizza - 1].t - 3);
         //  printf("Chef %d reached here at time %d. Sleeping for %d.\n", me->index + 1, curTime, pizzaInfo[me->assignedPizza - 1].t - 3);
         sem_post(&(ovensQueue));
 
-        green();
         pthread_mutex_lock(&printLock);
         blue();
         printf("Chef %d has picked up the pizza %d for the order %d from the oven at time %d.\n", me->index + 1, me->assignedPizza, me->callBackOrder->owner->index + 1, curTime);
         reset();
         pthread_mutex_unlock(&printLock);
-        reset();
+
         // set result of callback
         me->callBackOrder->results[me->orderPizzaID] = 1;
         sem_post(me->callBackOrder->wakeUp);
@@ -232,6 +250,12 @@ void *ordersFunc(void *arg) // red
         }
     }
     // go through chefs that are available rn
+    pthread_mutex_lock(&printLock);
+    red();
+    printf("Order %d placed by customer %d is being processed.\n", me->owner->index + 1, me->owner->index + 1);
+    reset();
+    pthread_mutex_unlock(&printLock);
+
     for (int pizzaIdx = 0; pizzaIdx < me->pizzas; pizzaIdx++)
     {
         int assignedChef = 0;
@@ -292,7 +316,11 @@ void *ordersFunc(void *arg) // red
     if (totalAcceptedPizzas == 0)
     {
         me->owner->dirRejected = 1;
-        // sleep(10);
+        pthread_mutex_lock(&printLock);
+        red();
+        printf("Order %d placed by customer %d completely rejected.\n", me->owner->index + 1, me->owner->index + 1);
+        reset();
+        pthread_mutex_unlock(&printLock);
         sem_post(me->owner->wakeUp); // leave
 
         return NULL;
@@ -305,12 +333,16 @@ void *ordersFunc(void *arg) // red
     }
 
     int anythingDone = 0;
+    int allDone = 1;
     for (int i = 0; i < me->pizzas; i++)
     {
         if (me->results[i])
         {
             anythingDone = 1;
-            break;
+        }
+        else
+        {
+            allDone = 0;
         }
     }
 
@@ -318,7 +350,10 @@ void *ordersFunc(void *arg) // red
     {
         pthread_mutex_lock(&printLock);
         red();
-        printf("Order %d placed by customer %d is ready.\n", me->owner->index + 1, me->owner->index + 1);
+        if (allDone)
+            printf("Order %d placed by customer %d has been processed.\n", me->owner->index + 1, me->owner->index + 1);
+        else
+            printf("Order %d placed by customer %d has been partially processed and remaining couldn't be.\n", me->owner->index + 1, me->owner->index + 1);
         reset();
         pthread_mutex_unlock(&printLock);
     }
@@ -326,11 +361,12 @@ void *ordersFunc(void *arg) // red
     {
         pthread_mutex_lock(&printLock);
         red();
-        printf("Order %d placed by customer %d is rejected.\n", me->owner->index + 1, me->owner->index + 1);
+        printf("Order %d placed by customer %d completely rejected.\n", me->owner->index + 1, me->owner->index + 1);
         reset();
         pthread_mutex_unlock(&printLock);
         me->owner->dirRejected = 1;
         sem_post(me->owner->leaveQ);
+        sem_post(me->owner->wakeUp);
         return NULL;
     }
 
@@ -343,11 +379,17 @@ void *customersFunc(void *arg) // yellow
     sem_wait(me->wakeUp);
     pthread_mutex_lock(&printLock);
     yellow();
-    printf("Customer %d arrives at time %d.: %d\n", me->index + 1, curTime, me->entry);
+    printf("Customer %d arrives at time %d\n", me->index + 1, curTime);
+    printf("Customer %d is waiting for the drive-thru allocation.\n", me->index + 1);
     reset();
     pthread_mutex_unlock(&printLock);
     // wait for entry
     sem_wait(&driveQueue);
+    pthread_mutex_lock(&printLock);
+    yellow();
+    printf("Customer %d enters the drive-thru zone and gives out their order %d\n", me->index + 1, me->index + 1);
+    reset();
+    pthread_mutex_unlock(&printLock);
     // create order thread
     int orderTime = curTime;
     pthread_create(&me->order.thread, NULL, ordersFunc, &me->order);
@@ -358,6 +400,7 @@ void *customersFunc(void *arg) // yellow
     {
         pthread_mutex_lock(&printLock);
         yellow();
+        printf("Customer %d is rejected.\n", me->index + 1);
         printf("Customer %d leaves at time %d.\n", me->index + 1, curTime);
         reset();
         pthread_mutex_unlock(&printLock);
@@ -376,6 +419,7 @@ void *customersFunc(void *arg) // yellow
     {
         pthread_mutex_lock(&printLock);
         yellow();
+        printf("Customer %d is rejected.\n", me->index + 1);
         printf("Customer %d leaves at time %d.\n", me->index + 1, curTime);
         reset();
         pthread_mutex_unlock(&printLock);
@@ -390,10 +434,12 @@ void *customersFunc(void *arg) // yellow
 
     sem_wait(me->wakeUp);
 
+    int gotSomething = 0;
     for (int i = 0; i < me->order.pizzas; i++)
     {
         if (me->order.results[i])
         {
+            gotSomething = 1;
             pthread_mutex_lock(&printLock);
             yellow();
             printf("Customer %d picks up their pizza %d.\n", me->index + 1, me->order.pizzaIDs[i]);
@@ -403,6 +449,10 @@ void *customersFunc(void *arg) // yellow
     }
     pthread_mutex_lock(&printLock);
     yellow();
+    if (gotSomething == 0)
+    {
+        printf("Customer %d is rejected.\n", me->index + 1);
+    }
     printf("Customer %d exits the drive-thru zone.\n", me->index + 1);
     reset();
     pthread_mutex_unlock(&printLock);
